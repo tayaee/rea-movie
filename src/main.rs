@@ -61,7 +61,7 @@ fn main() -> Result<()> {
             assemble::run_assemble(opts)?;
         }
         Commands::Pool(args) => {
-            pool::run_pool(args.command)?;
+            pool::run_pool_in(args.command, &args.proj_dir)?;
         }
         Commands::Mcp => {
             mcp::run_mcp_server()?;

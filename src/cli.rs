@@ -91,6 +91,10 @@ pub struct RenderArgs {
     /// Use local mock H3 synthesis (for testing without remote GPU pool)
     #[arg(long = "mock-h3")]
     pub mock_h3: bool,
+
+    /// Do not use remote analysis services (accepted for run-script compatibility)
+    #[arg(long = "offline")]
+    pub offline: bool,
 }
 
 #[derive(Debug, Args)]
@@ -121,6 +125,10 @@ pub struct AssembleArgs {
 
 #[derive(Debug, Args)]
 pub struct PoolArgs {
+    /// Path to a project directory containing rea-movie.toml (default: current directory)
+    #[arg(long = "proj-dir", default_value = ".")]
+    pub proj_dir: PathBuf,
+
     #[command(subcommand)]
     pub command: crate::pool::PoolCommands,
 }

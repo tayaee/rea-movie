@@ -151,7 +151,7 @@ robocop/
 ## 🖥️ DGX Spark (GB10) 서버 풀 및 MiniMax-H3 구동 아키텍처
 
 * **기본 노드 풀**: `spark1.local`, `spark2.local` (`rea-movie.toml`에서 1대 또는 N대로 자유롭게 설정 가능)
-* **원격 워크스페이스**: 각 호스트(제어 노드 및 H3 노드)의 `~/rea-movie-workspace/` 디렉토리에 H3 시작 스크립트(`serve-h3.sh`), `node-state.json`, 로그 등을 격리하여 관리합니다 (리포지토리 이름 `rea-movie`와의 경로 충돌 방지).
+* **공유 NAS 워크스페이스 (`/rosenas/data/rea-movie-workspace`)**: 제어 노드와 H3 노드(`spark1.local`, `spark2.local`)가 공통으로 마운트하고 있는 공유 NAS `/rosenas/data/rea-movie-workspace/`에 H3 시작 스크립트(`serve-h3.sh`), 노드별 상태 파일(`nodes/<node>/node-state.json`), 로그(`logs/`), 공유 프로젝트(`projects/`) 및 렌더링 출력을 생성하고 각 노드로 SSH 접속하여 공유 스토리지 위에서 직접 입출력을 주고받습니다 (불필요한 `scp` 파일 복사를 제거하고 리포지토리 이름 `rea-movie`와의 경로 충돌도 방지).
 * **동적 포트 탐색**: 기본 포트 `8000`을 확인하되, 통합 메모리 여유량(`MemAvailable`)이 충분한데 `8000`번 포트가 점유되어 있으면 자동으로 빈 포트(`8001`, `8002`...)를 찾아 컨테이너를 바인딩합니다.
 * **모드별 배칭 (Single-Tenant 보호)**:
   * DGX Spark 1대에는 `h3-fl2va`(`fl2va` 및 `t2va` 동시 지원) 또는 `h3-ref2va` 중 하나만 상주합니다.

@@ -1,0 +1,80 @@
+{
+  "issue": 2,
+  "started": "2026-11-13T22:05:22-05:00",
+  "coders": {
+    "issue-2-spark-pool-and-h3-renderer": {
+      "model": "MiniMax-M3"
+    },
+    "MiniMax-M3": {
+      "model": "MiniMax-M3"
+    }
+  },
+  "cost_details": [
+    {
+      "ts": "2026-11-13T22:18:53-05:00",
+      "script_id": "MiniMax-M3",
+      "model": "MiniMax-M3",
+      "reasoning_effort": "medium",
+      "bucket": "minimax",
+      "reason": null,
+      "five_hour_used_pct": 13.0,
+      "seven_day_used_pct": 5.0,
+      "ts_description": "cargo-test-start"
+    },
+    {
+      "ts": "2026-11-13T22:18:54-05:00",
+      "script_id": "MiniMax-M3",
+      "model": "MiniMax-M3",
+      "reasoning_effort": "medium",
+      "bucket": "minimax",
+      "reason": null,
+      "five_hour_used_pct": 13.0,
+      "seven_day_used_pct": 5.0,
+      "ts_description": "cargo-test-end"
+    },
+    {
+      "ts": "2026-11-13T22:18:55-05:00",
+      "script_id": "MiniMax-M3",
+      "model": "MiniMax-M3",
+      "reasoning_effort": "medium",
+      "bucket": "minimax",
+      "reason": null,
+      "five_hour_used_pct": 13.0,
+      "seven_day_used_pct": 5.0,
+      "ts_description": "verify-script-start"
+    },
+    {
+      "ts": "2026-11-13T22:19:18-05:00",
+      "script_id": "MiniMax-M3",
+      "model": "MiniMax-M3",
+      "reasoning_effort": "medium",
+      "bucket": "minimax",
+      "reason": null,
+      "five_hour_used_pct": 22.0,
+      "seven_day_used_pct": 6.0,
+      "ts_description": "verify-script-end"
+    },
+    {
+      "ts": "2026-11-13T22:19:18-05:00",
+      "script_id": "MiniMax-M3",
+      "model": "MiniMax-M3",
+      "reasoning_effort": "medium",
+      "bucket": "minimax",
+      "reason": null,
+      "five_hour_used_pct": 22.0,
+      "seven_day_used_pct": 6.0,
+      "ts_description": "regression-start"
+    },
+    {
+      "ts": "2026-11-13T22:19:28-05:00",
+      "script_id": "MiniMax-M3",
+      "model": "MiniMax-M3",
+      "reasoning_effort": "medium",
+      "bucket": "minimax",
+      "reason": null,
+      "five_hour_used_pct": 22.0,
+      "seven_day_used_pct": 6.0,
+      "ts_description": "regression-end"
+    }
+  ]
+}

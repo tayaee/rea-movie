@@ -6,3 +6,11 @@
 /tmp/
 /test-output/
 /sample-*/
+/sample_movies/*.mp4
+/sample_movies/*.mkv
+/sample_movies/*.webm
+/sample_movies/*.part
+/sample_movies/*.ytdl
+/sample_movies/*.srt
+/sample_movies/*.vtt
+
