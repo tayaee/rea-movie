@@ -1,5 +1,56 @@
-/target
+# Rust build output
+target/
+# keep Cargo.lock tracked (binary crate) — do NOT ignore it
+*.rs.bk
+*.orig
+*.rej
+
+# Env / secrets — never commit keys
 /.env
+.env*
+*.pem
+*.key
+
+# Release artifacts built by CI/locally (see .github/workflows/release.yml)
+rea-movie-linux
+rea-movie-windows.exe
+rea-movie-skill.zip
+dist/
+*.tar.gz
+
+# Generated movie projects / workspaces (heavy video I/O lives here, see src/config.rs)
+# When a project lives under .../rea-movie-projects/<name>, media root is
+# ../rea-movie-workspace/<name> so the project dir stays committable.
+/rea-movie-workspace/
+/rea-movie-projects/
+projects/
+nodes/
+logs/
+node-state.json
+serve-h3.log
+*.log
+
+# Render / assemble outputs at any depth (shots/shot_XXXX/renders/prod|smoke, outputs/prod|smoke)
+outputs/
+renders/
+history/
+**/outputs/
+**/renders/
+**/history/
+take_*.mp4
+
+# Heavy media — source-only staging (story/*.srt,*.md stay tracked; video/audio ignored)
+*.mp4
+*.mkv
+*.webm
+*.mov
+*.avi
+*.m4v
+*.wav
+*.mp3
+*.m4a
+*.flac
+*.aac
 /devtools/.rr_state.json
 /devtools/__pycache__/
 *.pyc
@@ -13,4 +64,14 @@
 /sample_movies/*.ytdl
 /sample_movies/*.srt
 /sample_movies/*.vtt
+
+# IDE / OS / temp
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+*~
+*.tmp
+*.bak
 
