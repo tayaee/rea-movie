@@ -27,6 +27,7 @@ pub struct DecompileOptions<'a> {
     pub smoke: bool,
     pub offline: bool,
     pub dub_lang: Option<&'a str>,
+    pub custom_mod: Option<&'a str>,
 }
 
 pub fn run_decompile(opts: DecompileOptions) -> Result<PathBuf> {
@@ -204,6 +205,7 @@ pub fn run_decompile(opts: DecompileOptions) -> Result<PathBuf> {
             dub_lang,
             subtitle_lines: &span_subtitles,
             has_subtitle_track,
+            custom_mod: opts.custom_mod,
         };
 
         generate_prompts(&prompt_ctx, &ko_path, &h3_path)?;

@@ -64,6 +64,10 @@ pub struct DecompileArgs {
     /// Target dubbing language for generated dialogue (e.g. 'ko' or 'en', default: 'en')
     #[arg(long = "dub-lang", visible_alias = "lang", default_value = "en")]
     pub dub_lang: String,
+
+    /// Custom visual/character modification applied to all shots (e.g. "주인공에게 KBO 야구모자를 씌워")
+    #[arg(long = "mod", visible_alias = "custom-prompt", visible_alias = "style")]
+    pub custom_mod: Option<String>,
 }
 
 #[derive(Debug, Args)]

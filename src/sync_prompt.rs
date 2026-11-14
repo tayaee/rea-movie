@@ -77,11 +77,18 @@ pub fn compile_ko_to_h3(ko_prompt: &str, meta: &ShotMeta) -> Result<String> {
             "No intrusive non-diegetic music; preserve the scene ambience.".to_string()
         });
 
-    let integrated = if integrated.is_empty() {
+    let mut integrated = if integrated.is_empty() {
         ko_prompt.trim().to_string()
     } else {
         integrated.join("\n")
     };
+    if (ko_prompt.to_ascii_lowercase().contains("kbo") || ko_prompt.contains("야구모자"))
+        && !integrated.contains("Korean Baseball Organization")
+    {
+        integrated.push_str(
+            "\nIMPORTANT VISUAL MODIFICATION: The main protagonist prominently wears a navy-and-red KBO (Korean Baseball Organization) baseball cap with a bold white embroidered 'KBO' emblem on his head throughout the entire shot.",
+        );
+    }
 
     Ok(format!(
         "{reference_line}\n\nintegrated_multimodal_description:\nFrom 0.0s to {:.2}s, maintain the camera, character action, expression, dialogue, and environmental continuity described below.\n{integrated}\n\noverall_soundscape:\n{soundscape}\n\nnon_diegetic_music:\n{music}\n",

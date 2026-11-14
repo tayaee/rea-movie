@@ -31,6 +31,7 @@ fn main() -> Result<()> {
                 smoke: args.smoke,
                 offline: args.offline,
                 dub_lang: Some(&args.dub_lang),
+                custom_mod: args.custom_mod.as_deref(),
             };
             run_decompile(opts)?;
         }

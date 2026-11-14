@@ -361,6 +361,7 @@ fn execute_tool(name: &str, args: &Value) -> Result<String> {
             let smoke = args.get("smoke").and_then(|v| v.as_bool()).unwrap_or(false);
             let offline = args.get("offline").and_then(|v| v.as_bool()).unwrap_or(false);
             let dub_lang = args.get("dub_lang").and_then(|v| v.as_str());
+            let custom_mod = args.get("custom_mod").and_then(|v| v.as_str());
 
             let opts = DecompileOptions {
                 input_path: input,
@@ -372,6 +373,7 @@ fn execute_tool(name: &str, args: &Value) -> Result<String> {
                 smoke,
                 offline,
                 dub_lang,
+                custom_mod,
             };
             decompile::run_decompile(opts)?;
             Ok(format!("Decompiled '{}' successfully", input))

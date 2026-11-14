@@ -17,6 +17,7 @@ pub struct PromptGenContext<'a> {
     pub dub_lang: &'a str,
     pub subtitle_lines: &'a [String],
     pub has_subtitle_track: bool,
+    pub custom_mod: Option<&'a str>,
 }
 
 pub fn generate_prompts(
@@ -284,6 +285,26 @@ fn generate_deterministic_template(ctx: &PromptGenContext) -> (String, String) {
         format!("{:.1}s", ctx.audio_peaks[0])
     };
     let (ko_dlg, h3_dlg) = build_dialogue_lines(ctx);
+    let (ko_mod, h3_mod) = match ctx.custom_mod {
+        Some(m) if !m.trim().is_empty() => {
+            let trimmed = m.trim();
+            if trimmed.to_ascii_lowercase().contains("kbo") || trimmed.contains("야구모자") {
+                (
+                    format!(
+                        "\n- 커스텀 연출(재생성 식별 마커): {} — 주인공은 머리에 'KBO' 로고가 선명하게 자수된 네이비/레드 배색의 한국 프로야구(KBO) 야구모자를 착용하고 있다.",
+                        trimmed
+                    ),
+                    " IMPORTANT VISUAL MODIFICATION: The main protagonist prominently wears a navy-and-red KBO (Korean Baseball Organization) baseball cap with a bold white embroidered 'KBO' emblem on his head throughout the entire shot.".to_string(),
+                )
+            } else {
+                (
+                    format!("\n- 커스텀 연출: {}", trimmed),
+                    format!(" IMPORTANT VISUAL MODIFICATION: {}.", trimmed),
+                )
+            }
+        }
+        _ => (String::new(), String::new()),
+    };
 
     let ko = format!(
 r#"# 샷 연출 지시서: {} ({:.2}s ~ {:.2}s)
@@ -291,7 +312,7 @@ r#"# 샷 연출 지시서: {} ({:.2}s ~ {:.2}s)
 ## 1. 화면 및 카메라 연출
 - 카메라: 원본 첫 프레임(<Picture 1>)과 끝 프레임(<Picture 2>) 구도를 정밀하게 잇는 시네마틱 샷
 - 조명 및 색감: 자연스러운 현장 조명과 높은 다이내믹 레인지 대비
-- 인물 구도: 프레임 내 인물 위치와 시선 방향을 일관되게 유지
+- 인물 구도: 프레임 내 인물 위치와 시선 방향을 일관되게 유지{}
 
 ## 2. 초 단위 동작 궤적
 - 0.0s ~ {:.1}s: 시작 프레임 구도에서 인물이 자연스러운 호흡과 시선을 유지하며 동작을 이어간다.
@@ -310,6 +331,7 @@ r#"# 샷 연출 지시서: {} ({:.2}s ~ {:.2}s)
         ctx.shot_id,
         ctx.start_sec,
         ctx.end_sec,
+        ko_mod,
         half_dur,
         half_dur,
         dur_round,
@@ -321,7 +343,7 @@ r#"# 샷 연출 지시서: {} ({:.2}s ~ {:.2}s)
 r#"For the target video, at 0.00 seconds into the target video, <Picture 1> and <Picture 2> (from [Shot {}]) are fully referenced.
 
 integrated_multimodal_description:
-From 0.0s to {:.1}s, the camera and subjects follow a smooth, realistic trajectory anchored by the first frame. {} At {}, a subtle acoustic peak is heard.
+From 0.0s to {:.1}s, the camera and subjects follow a smooth, realistic trajectory anchored by the first frame.{} {} At {}, a subtle acoustic peak is heard.
 From {:.1}s to {:.1}s, subtle head movement, natural gesture, and facial expression transition seamlessly into the final frame composition.
 
 overall_soundscape:
@@ -332,6 +354,7 @@ Subtle, restrained cinematic underscore maintaining dramatic tension without ove
 "#,
         ctx.shot_index,
         half_dur,
+        h3_mod,
         h3_dlg,
         peak_str,
         half_dur,
