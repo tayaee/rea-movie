@@ -1,0 +1,58 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --release
+      - run: |
+          cp target/release/rea-movie rea-movie-linux
+          (cd skills/rea-movie && zip -r ../../rea-movie-skill.zip .)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: assets-linux
+          path: |
+            rea-movie-linux
+            rea-movie-skill.zip
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --release
+      - run: Copy-Item target/release/rea-movie.exe rea-movie-windows.exe
+        shell: pwsh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: assets-windows
+          path: rea-movie-windows.exe
+
+  publish:
+    needs: [build-linux, build-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: assets-linux
+          path: assets
+      - uses: actions/download-artifact@v4
+        with:
+          name: assets-windows
+          path: assets
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            assets/rea-movie-linux
+            assets/rea-movie-windows.exe
+            assets/rea-movie-skill.zip

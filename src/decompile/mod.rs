@@ -32,8 +32,12 @@ pub struct DecompileOptions<'a> {
 
 pub fn run_decompile(opts: DecompileOptions) -> Result<PathBuf> {
     let input_path = opts.input_path;
-    let input_meta = std::fs::metadata(input_path)
-        .with_context(|| format!("Input video file '{}' does not exist or cannot be accessed", input_path))?;
+    let input_meta = std::fs::metadata(input_path).with_context(|| {
+        format!(
+            "Input video file '{}' does not exist or cannot be accessed",
+            input_path
+        )
+    })?;
     if !input_meta.is_file() {
         anyhow::bail!("Input path '{}' is not a regular file", input_path);
     }
@@ -64,8 +68,12 @@ pub fn run_decompile(opts: DecompileOptions) -> Result<PathBuf> {
         .with_context(|| format!("Failed to create project directory at {:?}", proj_dir))?;
 
     let media_dir = crate::config::resolve_media_root(&proj_dir);
-    std::fs::create_dir_all(&media_dir)
-        .with_context(|| format!("Failed to create media workspace directory at {:?}", media_dir))?;
+    std::fs::create_dir_all(&media_dir).with_context(|| {
+        format!(
+            "Failed to create media workspace directory at {:?}",
+            media_dir
+        )
+    })?;
 
     if media_dir != proj_dir {
         let gitignore_path = proj_dir.join(".gitignore");
@@ -103,7 +111,10 @@ pub fn run_decompile(opts: DecompileOptions) -> Result<PathBuf> {
     config.save_to_file(&config_path)?;
 
     // 3. Detect scenes and shot spans
-    println!("==> Detecting scene cuts and building shot spans (max duration: {:.1}s)...", max_dur);
+    println!(
+        "==> Detecting scene cuts and building shot spans (max duration: {:.1}s)...",
+        max_dur
+    );
     let spans = build_shot_spans(&input_str, opts.range, max_dur)?;
     println!("==> Total shots identified: {}", spans.len());
 
@@ -218,7 +229,11 @@ pub fn run_decompile(opts: DecompileOptions) -> Result<PathBuf> {
             duration: span.duration,
             is_chained_longtake: span.is_chained_longtake,
             audio_peaks: &shot_meta.audio_peaks,
-            speaker: shot_meta.characters.first().map(|s| s.as_str()).unwrap_or("S1"),
+            speaker: shot_meta
+                .characters
+                .first()
+                .map(|s| s.as_str())
+                .unwrap_or("S1"),
             contact_sheet_path: &contact_sheet,
             offline: opts.offline,
             force: opts.force,
@@ -232,14 +247,23 @@ pub fn run_decompile(opts: DecompileOptions) -> Result<PathBuf> {
     }
 
     // 6. Story & Character assets
-    generate_story_assets(&proj_dir, &media_dir, spans.len(), total_dur, Some(&input_str))?;
+    generate_story_assets(
+        &proj_dir,
+        &media_dir,
+        spans.len(),
+        total_dur,
+        Some(&input_str),
+    )?;
 
     // 7. run.sh
     generate_run_script(&proj_dir)?;
 
     println!("==> Project decompile complete at: {:?}", proj_dir);
     if media_dir != proj_dir {
-        println!("==> Media workspace (clips & render outputs) separated at: {:?}", media_dir);
+        println!(
+            "==> Media workspace (clips & render outputs) separated at: {:?}",
+            media_dir
+        );
     }
 
     // 8. If --run flag, invoke render and assemble

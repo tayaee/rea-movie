@@ -63,7 +63,11 @@ pub fn parse_srt(content: &str) -> Vec<SubtitleCue> {
     let tag_re = Regex::new(r"<[^>]+>").unwrap();
 
     for block in content.replace("\r\n", "\n").split("\n\n") {
-        let lines: Vec<&str> = block.lines().map(|l| l.trim()).filter(|l| !l.is_empty()).collect();
+        let lines: Vec<&str> = block
+            .lines()
+            .map(|l| l.trim())
+            .filter(|l| !l.is_empty())
+            .collect();
         if lines.len() < 2 {
             continue;
         }
@@ -140,7 +144,7 @@ voice_fingerprint = "gritty tense male voice with sharp delivery"
     let screenplay_path = story_dir.join("screenplay.md");
     if !screenplay_path.exists() {
         let screenplay_content = format!(
-r#"# Reverse-Engineered Screenplay
+            r#"# Reverse-Engineered Screenplay
 
 ## Scene 1 - Intro & Sequence ({:.2}s total)
 
@@ -179,7 +183,10 @@ It contains {} sequential camera shots.
     }
 
     // assets/characters/S1_narrator/face.jpg in proj_dir, voice.wav in media_dir
-    let char_s1_dir = proj_dir.join("assets").join("characters").join("S1_narrator");
+    let char_s1_dir = proj_dir
+        .join("assets")
+        .join("characters")
+        .join("S1_narrator");
     std::fs::create_dir_all(&char_s1_dir)?;
 
     let face_path = char_s1_dir.join("face.jpg");
@@ -188,7 +195,10 @@ It contains {} sequential camera shots.
         let _ = img.save(&face_path);
     }
 
-    let media_char_s1_dir = media_dir.join("assets").join("characters").join("S1_narrator");
+    let media_char_s1_dir = media_dir
+        .join("assets")
+        .join("characters")
+        .join("S1_narrator");
     std::fs::create_dir_all(&media_char_s1_dir)?;
     let voice_path = media_char_s1_dir.join("voice.wav");
     if !voice_path.exists() {

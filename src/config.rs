@@ -1,6 +1,6 @@
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use anyhow::{Context, Result};
 
 /// Resolves the workspace media root for heavy video/audio files (`original_clip.mp4`,
 /// `original_audio.wav`, `renders/`, `outputs/`).
@@ -163,8 +163,8 @@ impl ProjectConfig {
     }
 
     pub fn save_to_file<P: AsRef<Path>>(&self, path: P) -> Result<()> {
-        let content = toml::to_string_pretty(self)
-            .context("Failed to serialize ProjectConfig to TOML")?;
+        let content =
+            toml::to_string_pretty(self).context("Failed to serialize ProjectConfig to TOML")?;
         std::fs::write(path.as_ref(), content)
             .with_context(|| format!("Failed to write config to {:?}", path.as_ref()))?;
         Ok(())

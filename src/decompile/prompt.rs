@@ -23,11 +23,7 @@ pub struct PromptGenContext<'a> {
     pub custom_mod: Option<&'a str>,
 }
 
-pub fn generate_prompts(
-    ctx: &PromptGenContext,
-    ko_path: &Path,
-    h3_path: &Path,
-) -> Result<()> {
+pub fn generate_prompts(ctx: &PromptGenContext, ko_path: &Path, h3_path: &Path) -> Result<()> {
     let need_ko = ctx.force || !ko_path.exists();
     let need_h3 = ctx.force || !h3_path.exists();
 
@@ -41,7 +37,10 @@ pub fn generate_prompts(
     let api_key = std::env::var("MINIMAX_API_KEY").ok();
     if !ctx.offline
         && !MINIMAX_API_DISABLED.load(Ordering::Relaxed)
-        && api_key.as_deref().map(|k| !k.trim().is_empty()).unwrap_or(false)
+        && api_key
+            .as_deref()
+            .map(|k| !k.trim().is_empty())
+            .unwrap_or(false)
         && ctx.contact_sheet_path.exists()
     {
         match try_minimax_m3_api(ctx, api_key.as_deref().unwrap().trim()) {
@@ -94,7 +93,10 @@ pub fn translate_line_to_korean(line: &str) -> String {
         .trim()
         .to_string();
 
-    if clean.chars().any(|c| ('\u{AC00}'..='\u{D7A3}').contains(&c)) {
+    if clean
+        .chars()
+        .any(|c| ('\u{AC00}'..='\u{D7A3}').contains(&c))
+    {
         return clean;
     }
 
@@ -108,26 +110,62 @@ pub fn translate_line_to_korean(line: &str) -> String {
         ("your play, walter", "자네 차례야, 월터."),
         ("you're playing, walter", "자네 차례야, 월터."),
         ("you're on your own", "이제부턴 혼자 알아서 해."),
-        ("looks like you're about 1,000", "1천 갤런쯤 모자라 보이는데, 마이크."),
+        (
+            "looks like you're about 1,000",
+            "1천 갤런쯤 모자라 보이는데, 마이크.",
+        ),
         ("where's the juice", "물건은 어딨어?"),
         ("the methylamine isn't coming", "메틸아민은 오지 않는다."),
         ("methalamine isn't coming", "메틸아민은 오지 않는다."),
         ("why is that", "그게 무슨 소리야?"),
         ("who the hell are you", "그리고 당신은 대체 누구야?"),
-        ("i'm the man who's keeping it", "내가 그 물건을 쥐고 있는 사람이다."),
+        (
+            "i'm the man who's keeping it",
+            "내가 그 물건을 쥐고 있는 사람이다.",
+        ),
         ("what the hell's this", "이게 대체 무슨 수작이야?"),
-        ("we had an agreement, right", "우리 이미 계약했잖아, 안 그래?"),
-        ("so where's the tank, mike", "그러니까 탱크는 어딨어, 마이크?"),
-        ("mike doesn't know where it is", "마이크는 그 물건이 어딨는지 몰라."),
-        ("only i do", "오직 나만 알지. 이제부터 거래 상대는 마이크가 아니라 나다."),
+        (
+            "we had an agreement, right",
+            "우리 이미 계약했잖아, 안 그래?",
+        ),
+        (
+            "so where's the tank, mike",
+            "그러니까 탱크는 어딨어, 마이크?",
+        ),
+        (
+            "mike doesn't know where it is",
+            "마이크는 그 물건이 어딨는지 몰라.",
+        ),
+        (
+            "only i do",
+            "오직 나만 알지. 이제부터 거래 상대는 마이크가 아니라 나다.",
+        ),
         ("why don't you just cut", "원하는 게 뭔지 본론만 말해 봐."),
-        ("what you think is gonna", "여기서 무슨 일이 벌어질지 잘 생각해 보라고."),
-        ("what you think is going to", "여기서 무슨 일이 벌어질지 잘 생각해 보라고."),
+        (
+            "what you think is gonna",
+            "여기서 무슨 일이 벌어질지 잘 생각해 보라고.",
+        ),
+        (
+            "what you think is going to",
+            "여기서 무슨 일이 벌어질지 잘 생각해 보라고.",
+        ),
         ("we're gonna get", "우린 무조건 가지러 온 걸 챙겨갈 거니까."),
-        ("we're going to get", "우린 무조건 가지러 온 걸 챙겨갈 거니까."),
-        ("1,000 gallons of methylamine", "그 메틸아민 1천 갤런은 내 손에 있을 때 훨씬 더 가치가 크다."),
-        ("1,000 gal of methalamine", "그 메틸아민 1천 갤런은 내 손에 있을 때 훨씬 더 가치가 크다."),
-        ("than it is in yours", "당신들이나 다른 누구 손에 있을 때보다 말이야."),
+        (
+            "we're going to get",
+            "우린 무조건 가지러 온 걸 챙겨갈 거니까.",
+        ),
+        (
+            "1,000 gallons of methylamine",
+            "그 메틸아민 1천 갤런은 내 손에 있을 때 훨씬 더 가치가 크다.",
+        ),
+        (
+            "1,000 gal of methalamine",
+            "그 메틸아민 1천 갤런은 내 손에 있을 때 훨씬 더 가치가 크다.",
+        ),
+        (
+            "than it is in yours",
+            "당신들이나 다른 누구 손에 있을 때보다 말이야.",
+        ),
         ("but i need distribution", "하지만 난 유통망이 필요해."),
         ("distribution.", "유통망이라고?"),
         ("distribution?", "유통망이라고?"),
@@ -138,14 +176,35 @@ pub fn translate_line_to_korean(line: &str) -> String {
         ("35 percent?", "35퍼센트? 와, 지금 장난하는 거야?"),
         ("35% wow", "35퍼센트? 와, 지금 장난하는 거야?"),
         ("mike, please tell", "마이크, 제발 이게 농담이라고 말해 봐."),
-        ("stick our necks out", "이 현금을 마련하려고 우리가 얼마나 목숨을 걸었는지 알아?"),
-        ("why the hell would we want you", "그런데 우리가 대체 왜 당신이랑 손을 잡아야 하지?"),
-        ("we have our own operation", "우리도 자체 제조 시설이 있는 거 알잖아?"),
-        ("i know all about your operation", "너희 제조 시설에 대해선 이미 다 알고 있다."),
-        ("70% pure", "운이 좋아 봐야 순도 70퍼센트짜리 마약을 만든다더군."),
+        (
+            "stick our necks out",
+            "이 현금을 마련하려고 우리가 얼마나 목숨을 걸었는지 알아?",
+        ),
+        (
+            "why the hell would we want you",
+            "그런데 우리가 대체 왜 당신이랑 손을 잡아야 하지?",
+        ),
+        (
+            "we have our own operation",
+            "우리도 자체 제조 시설이 있는 거 알잖아?",
+        ),
+        (
+            "i know all about your operation",
+            "너희 제조 시설에 대해선 이미 다 알고 있다.",
+        ),
+        (
+            "70% pure",
+            "운이 좋아 봐야 순도 70퍼센트짜리 마약을 만든다더군.",
+        ),
         ("99.1% pure", "내가 만드는 물건은 순도 99.1퍼센트다."),
-        ("grade school t-ball", "초등학교 동네 야구와 뉴욕 양키스의 차이지."),
-        ("classic coke", "네 것은 싸구려 유사 콜라고, 내 것은 정통 코카콜라다."),
+        (
+            "grade school t-ball",
+            "초등학교 동네 야구와 뉴욕 양키스의 차이지.",
+        ),
+        (
+            "classic coke",
+            "네 것은 싸구려 유사 콜라고, 내 것은 정통 코카콜라다.",
+        ),
     ];
 
     let mut matched = Vec::new();
@@ -183,7 +242,10 @@ fn build_dialogue_lines(ctx: &PromptGenContext) -> (String, String) {
             ctx.subtitle_lines.join(" ")
         };
 
-        let ko_line = format!("- {}: <d>[{}] {}</d>", ctx.speaker, lang_tag, joined_dialogue);
+        let ko_line = format!(
+            "- {}: <d>[{}] {}</d>",
+            ctx.speaker, lang_tag, joined_dialogue
+        );
         let h3_line = format!(
             "{} speaks clearly with synchronized lip movement: <d>[{}] {}</d>.",
             ctx.speaker, lang_tag, joined_dialogue
@@ -282,8 +344,14 @@ fn try_minimax_m3_api(ctx: &PromptGenContext, api_key: &str) -> Result<(String, 
     };
 
     let parsed: serde_json::Value = serde_json::from_str(json_slice)?;
-    let ko = parsed["prompt_ko"].as_str().context("Missing prompt_ko")?.to_string();
-    let h3 = parsed["prompt_h3"].as_str().context("Missing prompt_h3")?.to_string();
+    let ko = parsed["prompt_ko"]
+        .as_str()
+        .context("Missing prompt_ko")?
+        .to_string();
+    let h3 = parsed["prompt_h3"]
+        .as_str()
+        .context("Missing prompt_h3")?
+        .to_string();
 
     Ok((ko, h3))
 }
@@ -319,7 +387,7 @@ fn generate_deterministic_template(ctx: &PromptGenContext) -> (String, String) {
     };
 
     let ko = format!(
-r#"# 샷 연출 지시서: {} ({:.2}s ~ {:.2}s)
+        r#"# 샷 연출 지시서: {} ({:.2}s ~ {:.2}s)
 
 ## 1. 화면 및 카메라 연출
 - 카메라: 원본 첫 프레임(<Picture 1>)과 끝 프레임(<Picture 2>) 구도를 정밀하게 잇는 시네마틱 샷
@@ -352,7 +420,7 @@ r#"# 샷 연출 지시서: {} ({:.2}s ~ {:.2}s)
     );
 
     let h3 = format!(
-r#"For the target video, at 0.00 seconds into the target video, <Picture 1> and <Picture 2> (from [Shot {}]) are fully referenced.
+        r#"For the target video, at 0.00 seconds into the target video, <Picture 1> and <Picture 2> (from [Shot {}]) are fully referenced.
 
 integrated_multimodal_description:
 From 0.0s to {:.1}s, the camera and subjects follow a smooth, realistic trajectory anchored by the first frame.{} {} At {}, a subtle acoustic peak is heard.
@@ -364,13 +432,7 @@ Realistic spatial ambiance with clean environmental presence and natural acousti
 non_diegetic_music:
 Subtle, restrained cinematic underscore maintaining dramatic tension without overpowering the dialogue.
 "#,
-        ctx.shot_index,
-        half_dur,
-        h3_mod,
-        h3_dlg,
-        peak_str,
-        half_dur,
-        dur_round
+        ctx.shot_index, half_dur, h3_mod, h3_dlg, peak_str, half_dur, dur_round
     );
 
     (ko, h3)

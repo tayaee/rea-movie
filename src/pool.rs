@@ -234,6 +234,7 @@ fn write_script(path: &Path, base_port: u16) -> Result<()> {
 }
 
 fn make_executable(path: &Path) -> Result<()> {
+    let _ = path;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;

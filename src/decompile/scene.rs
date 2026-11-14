@@ -15,9 +15,12 @@ pub struct ShotSpan {
 pub fn probe_video_duration(video_path: &str) -> Result<f64> {
     let output = Command::new("ffprobe")
         .args([
-            "-v", "error",
-            "-show_entries", "format=duration",
-            "-of", "default=noprint_wrappers=1:nokey=1",
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
             video_path,
         ])
         .output()
@@ -29,7 +32,9 @@ pub fn probe_video_duration(video_path: &str) -> Result<f64> {
     }
 
     let out_str = String::from_utf8_lossy(&output.stdout);
-    let duration: f64 = out_str.trim().parse()
+    let duration: f64 = out_str
+        .trim()
+        .parse()
         .with_context(|| format!("Failed to parse duration: '{}'", out_str.trim()))?;
     Ok(duration)
 }
@@ -73,11 +78,16 @@ pub fn parse_time_range(range_str: &str, total_duration: f64) -> Result<(f64, f6
 pub fn detect_scene_cuts(video_path: &str, start_bound: f64, end_bound: f64) -> Result<Vec<f64>> {
     let output = Command::new("ffmpeg")
         .args([
-            "-ss", &format!("{:.3}", start_bound),
-            "-to", &format!("{:.3}", end_bound),
-            "-i", video_path,
-            "-filter_complex", "select='gt(scene,0.14)',showinfo",
-            "-f", "null",
+            "-ss",
+            &format!("{:.3}", start_bound),
+            "-to",
+            &format!("{:.3}", end_bound),
+            "-i",
+            video_path,
+            "-filter_complex",
+            "select='gt(scene,0.14)',showinfo",
+            "-f",
+            "null",
             "-",
         ])
         .output()
@@ -115,7 +125,11 @@ pub fn build_shot_spans(
     };
 
     if end_time <= start_time {
-        anyhow::bail!("Effective range duration must be > 0 (start: {}, end: {})", start_time, end_time);
+        anyhow::bail!(
+            "Effective range duration must be > 0 (start: {}, end: {})",
+            start_time,
+            end_time
+        );
     }
 
     let detected_cuts = detect_scene_cuts(video_path, start_time, end_time).unwrap_or_default();

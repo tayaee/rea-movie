@@ -331,7 +331,7 @@ fn get_tool_definitions() -> Vec<Value> {
                     }
                 }
             }
-        })
+        }),
     ]
 }
 
@@ -359,7 +359,10 @@ fn execute_tool(name: &str, args: &Value) -> Result<String> {
             let force = args.get("force").and_then(|v| v.as_bool()).unwrap_or(false);
             let run = args.get("run").and_then(|v| v.as_bool()).unwrap_or(false);
             let smoke = args.get("smoke").and_then(|v| v.as_bool()).unwrap_or(false);
-            let offline = args.get("offline").and_then(|v| v.as_bool()).unwrap_or(false);
+            let offline = args
+                .get("offline")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
             let dub_lang = args.get("dub_lang").and_then(|v| v.as_str());
             let custom_mod = args.get("custom_mod").and_then(|v| v.as_str());
 
@@ -379,10 +382,7 @@ fn execute_tool(name: &str, args: &Value) -> Result<String> {
             Ok(format!("Decompiled '{}' successfully", input))
         }
         "list_shots" => {
-            let proj_dir_str = args
-                .get("proj_dir")
-                .and_then(|v| v.as_str())
-                .unwrap_or(".");
+            let proj_dir_str = args.get("proj_dir").and_then(|v| v.as_str()).unwrap_or(".");
             let proj_dir = Path::new(proj_dir_str);
             let media_dir = crate::config::resolve_media_root(proj_dir);
 
@@ -460,10 +460,7 @@ fn execute_tool(name: &str, args: &Value) -> Result<String> {
                 .and_then(|v| v.as_str())
                 .context("Parameter 'shot_id' is required for inspect_shot")?;
             let shot_id = normalize_shot_id(shot_id_raw);
-            let proj_dir_str = args
-                .get("proj_dir")
-                .and_then(|v| v.as_str())
-                .unwrap_or(".");
+            let proj_dir_str = args.get("proj_dir").and_then(|v| v.as_str()).unwrap_or(".");
             let shot_dir = Path::new(proj_dir_str).join("shots").join(&shot_id);
 
             if !shot_dir.is_dir() {
@@ -493,10 +490,7 @@ fn execute_tool(name: &str, args: &Value) -> Result<String> {
                 .and_then(|v| v.as_str())
                 .context("Parameter 'shot_id' is required for update_shot_prompt")?;
             let shot_id = normalize_shot_id(shot_id_raw);
-            let proj_dir_str = args
-                .get("proj_dir")
-                .and_then(|v| v.as_str())
-                .unwrap_or(".");
+            let proj_dir_str = args.get("proj_dir").and_then(|v| v.as_str()).unwrap_or(".");
             let shot_dir = Path::new(proj_dir_str).join("shots").join(&shot_id);
 
             if !shot_dir.is_dir() {
@@ -543,16 +537,10 @@ fn execute_tool(name: &str, args: &Value) -> Result<String> {
             ))
         }
         "render_shot" => {
-            let proj_dir_str = args
-                .get("proj_dir")
-                .and_then(|v| v.as_str())
-                .unwrap_or(".");
+            let proj_dir_str = args.get("proj_dir").and_then(|v| v.as_str()).unwrap_or(".");
             let proj_dir = Path::new(proj_dir_str);
             let shot = args.get("shot").and_then(|v| v.as_str()).map(String::from);
-            let range = args
-                .get("range")
-                .and_then(|v| v.as_str())
-                .map(String::from);
+            let range = args.get("range").and_then(|v| v.as_str()).map(String::from);
             let smoke = args.get("smoke").and_then(|v| v.as_bool()).unwrap_or(false);
             let force = args.get("force").and_then(|v| v.as_bool()).unwrap_or(false);
             let force_video_only = args
@@ -577,10 +565,7 @@ fn execute_tool(name: &str, args: &Value) -> Result<String> {
             Ok("Render finished successfully".to_string())
         }
         "assemble_movie" => {
-            let proj_dir_str = args
-                .get("proj_dir")
-                .and_then(|v| v.as_str())
-                .unwrap_or(".");
+            let proj_dir_str = args.get("proj_dir").and_then(|v| v.as_str()).unwrap_or(".");
             let proj_dir = Path::new(proj_dir_str);
             let smoke = args.get("smoke").and_then(|v| v.as_bool()).unwrap_or(false);
 
@@ -589,10 +574,7 @@ fn execute_tool(name: &str, args: &Value) -> Result<String> {
             Ok("Movie assembly finished successfully".to_string())
         }
         "pool_status" => {
-            let proj_dir_str = args
-                .get("proj_dir")
-                .and_then(|v| v.as_str())
-                .unwrap_or(".");
+            let proj_dir_str = args.get("proj_dir").and_then(|v| v.as_str()).unwrap_or(".");
             let proj_dir = Path::new(proj_dir_str);
 
             let config_path = proj_dir.join("rea-movie.toml");

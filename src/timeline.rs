@@ -1,6 +1,6 @@
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
-use anyhow::{Context, Result};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TimelineManifest {
@@ -54,8 +54,8 @@ impl TimelineManifest {
     }
 
     pub fn save_to_file<P: AsRef<Path>>(&self, path: P) -> Result<()> {
-        let content = serde_json::to_string_pretty(self)
-            .context("Failed to serialize timeline to JSON")?;
+        let content =
+            serde_json::to_string_pretty(self).context("Failed to serialize timeline to JSON")?;
         std::fs::write(path.as_ref(), content)
             .with_context(|| format!("Failed to write timeline to {:?}", path.as_ref()))?;
         Ok(())
@@ -72,8 +72,8 @@ impl ShotMeta {
     }
 
     pub fn save_to_file<P: AsRef<Path>>(&self, path: P) -> Result<()> {
-        let content = toml::to_string_pretty(self)
-            .context("Failed to serialize shot.toml to TOML")?;
+        let content =
+            toml::to_string_pretty(self).context("Failed to serialize shot.toml to TOML")?;
         std::fs::write(path.as_ref(), content)
             .with_context(|| format!("Failed to write shot.toml to {:?}", path.as_ref()))?;
         Ok(())

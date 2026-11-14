@@ -38,16 +38,27 @@ pub fn extract_shot_references(
         let status = Command::new("ffmpeg")
             .args([
                 "-y",
-                "-ss", &format!("{:.3}", start_sec),
-                "-to", &format!("{:.3}", end_sec),
-                "-i", video_path,
-                "-c:v", "libx264",
-                "-pix_fmt", "yuv420p",
-                "-c:a", "aac",
+                "-ss",
+                &format!("{:.3}", start_sec),
+                "-to",
+                &format!("{:.3}", end_sec),
+                "-i",
+                video_path,
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+                "-c:a",
+                "aac",
                 paths.original_clip.to_str().unwrap(),
             ])
             .output()
-            .with_context(|| format!("Failed to extract original clip for shot at {:.2}s", start_sec))?;
+            .with_context(|| {
+                format!(
+                    "Failed to extract original clip for shot at {:.2}s",
+                    start_sec
+                )
+            })?;
 
         if !status.status.success() {
             let stderr = String::from_utf8_lossy(&status.stderr);
@@ -60,17 +71,28 @@ pub fn extract_shot_references(
         let status = Command::new("ffmpeg")
             .args([
                 "-y",
-                "-ss", &format!("{:.3}", start_sec),
-                "-to", &format!("{:.3}", end_sec),
-                "-i", video_path,
+                "-ss",
+                &format!("{:.3}", start_sec),
+                "-to",
+                &format!("{:.3}", end_sec),
+                "-i",
+                video_path,
                 "-vn",
-                "-acodec", "pcm_s16le",
-                "-ar", "32000",
-                "-ac", "2",
+                "-acodec",
+                "pcm_s16le",
+                "-ar",
+                "32000",
+                "-ac",
+                "2",
                 paths.original_audio.to_str().unwrap(),
             ])
             .output()
-            .with_context(|| format!("Failed to extract original audio for shot at {:.2}s", start_sec))?;
+            .with_context(|| {
+                format!(
+                    "Failed to extract original audio for shot at {:.2}s",
+                    start_sec
+                )
+            })?;
 
         if !status.status.success() {
             let stderr = String::from_utf8_lossy(&status.stderr);
@@ -85,10 +107,14 @@ pub fn extract_shot_references(
         let status = Command::new("ffmpeg")
             .args([
                 "-y",
-                "-ss", &format!("{:.3}", first_time),
-                "-i", video_path,
-                "-vframes", "1",
-                "-q:v", "2",
+                "-ss",
+                &format!("{:.3}", first_time),
+                "-i",
+                video_path,
+                "-vframes",
+                "1",
+                "-q:v",
+                "2",
                 paths.first_frame.to_str().unwrap(),
             ])
             .output()
@@ -107,10 +133,14 @@ pub fn extract_shot_references(
         let status = Command::new("ffmpeg")
             .args([
                 "-y",
-                "-ss", &format!("{:.3}", last_time),
-                "-i", video_path,
-                "-vframes", "1",
-                "-q:v", "2",
+                "-ss",
+                &format!("{:.3}", last_time),
+                "-i",
+                video_path,
+                "-vframes",
+                "1",
+                "-q:v",
+                "2",
                 paths.last_frame.to_str().unwrap(),
             ])
             .output()

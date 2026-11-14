@@ -30,7 +30,11 @@ pub fn run_assemble(opts: AssembleOptions) -> Result<()> {
     if shots.is_empty() {
         bail!("No shots found to assemble in {:?}", opts.proj_dir);
     }
-    println!("==> Assembling {} shot(s) for movie: {}", shots.len(), movie_name);
+    println!(
+        "==> Assembling {} shot(s) for movie: {}",
+        shots.len(),
+        movie_name
+    );
 
     let media_dir = crate::config::resolve_media_root(opts.proj_dir);
     let output_dir = media_dir.join("outputs").join(profile);
@@ -46,7 +50,10 @@ pub fn run_assemble(opts: AssembleOptions) -> Result<()> {
 
     // 2. Assemble side-by-side compare video
     assemble_compare_movie(&shots, &compare_movie_path, &output_dir)?;
-    println!("==> Compare movie created: {}", compare_movie_path.display());
+    println!(
+        "==> Compare movie created: {}",
+        compare_movie_path.display()
+    );
 
     println!("==> Assemble complete for profile: {}", profile);
     Ok(())
@@ -77,7 +84,9 @@ fn resolve_movie_name(proj_dir: &Path, config: &ProjectConfig) -> String {
 }
 
 fn collect_assemble_shots(proj_dir: &Path, profile: &str) -> Result<Vec<AssembleShot>> {
-    let proj_dir = proj_dir.canonicalize().unwrap_or_else(|_| proj_dir.to_path_buf());
+    let proj_dir = proj_dir
+        .canonicalize()
+        .unwrap_or_else(|_| proj_dir.to_path_buf());
     let mut shot_ids = Vec::new();
 
     let timeline_path = proj_dir.join("timeline.json");
@@ -212,12 +221,10 @@ fn escape_ffmpeg_path(path: &Path) -> String {
     s.replace('\\', "/").replace('\'', "'\\''")
 }
 
-fn assemble_final_movie(
-    shots: &[AssembleShot],
-    final_path: &Path,
-    work_dir: &Path,
-) -> Result<()> {
-    let work_dir = work_dir.canonicalize().unwrap_or_else(|_| work_dir.to_path_buf());
+fn assemble_final_movie(shots: &[AssembleShot], final_path: &Path, work_dir: &Path) -> Result<()> {
+    let work_dir = work_dir
+        .canonicalize()
+        .unwrap_or_else(|_| work_dir.to_path_buf());
     let h3_list_path = work_dir.join(format!(".h3_concat_{}.txt", std::process::id()));
     let orig_list_path = work_dir.join(format!(".orig_concat_{}.txt", std::process::id()));
     let temp_final_path = work_dir.join(format!(".temp_final_{}.mp4", std::process::id()));
@@ -243,19 +250,27 @@ fn assemble_final_movie(
         fs::write(&orig_list_path, &orig_list_content)?;
     }
 
-    let h3_has_audio = shots.first().map(|s| has_audio_stream(&s.render_video)).unwrap_or(false);
+    let h3_has_audio = shots
+        .first()
+        .map(|s| has_audio_stream(&s.render_video))
+        .unwrap_or(false);
     let orig_has_audio = all_orig_clips_exist
-        && shots.first().map(|s| has_audio_stream(&s.orig_clip)).unwrap_or(false);
+        && shots
+            .first()
+            .map(|s| has_audio_stream(&s.orig_clip))
+            .unwrap_or(false);
 
     let mut cmd = Command::new("ffmpeg");
     cmd.args(["-nostdin", "-v", "error", "-y"]);
 
     // Input 0: H3 rendered shots
-    cmd.args(["-f", "concat", "-safe", "0", "-i"]).arg(&h3_list_path);
+    cmd.args(["-f", "concat", "-safe", "0", "-i"])
+        .arg(&h3_list_path);
 
     // Input 1: Original reference shots (if available)
     if orig_has_audio {
-        cmd.args(["-f", "concat", "-safe", "0", "-i"]).arg(&orig_list_path);
+        cmd.args(["-f", "concat", "-safe", "0", "-i"])
+            .arg(&orig_list_path);
     }
 
     // Map video from H3
@@ -325,7 +340,9 @@ fn assemble_compare_movie(
     compare_path: &Path,
     work_dir: &Path,
 ) -> Result<()> {
-    let work_dir = work_dir.canonicalize().unwrap_or_else(|_| work_dir.to_path_buf());
+    let work_dir = work_dir
+        .canonicalize()
+        .unwrap_or_else(|_| work_dir.to_path_buf());
     let pid = std::process::id();
     let temp_compare_dir = work_dir.join(format!(".tmp_compare_{}", pid));
     fs::create_dir_all(&temp_compare_dir)?;
@@ -352,15 +369,7 @@ fn assemble_compare_movie(
     // Try fast stream copy concat first
     let output = Command::new("ffmpeg")
         .args([
-            "-nostdin",
-            "-v",
-            "error",
-            "-y",
-            "-f",
-            "concat",
-            "-safe",
-            "0",
-            "-i",
+            "-nostdin", "-v", "error", "-y", "-f", "concat", "-safe", "0", "-i",
         ])
         .arg(&concat_list_path)
         .args(["-c", "copy", "-movflags", "+faststart"])
@@ -376,15 +385,7 @@ fn assemble_compare_movie(
         // Fallback to re-encoding concat if copy failed
         let reencode_output = Command::new("ffmpeg")
             .args([
-                "-nostdin",
-                "-v",
-                "error",
-                "-y",
-                "-f",
-                "concat",
-                "-safe",
-                "0",
-                "-i",
+                "-nostdin", "-v", "error", "-y", "-f", "concat", "-safe", "0", "-i",
             ])
             .arg(&concat_list_path)
             .args([
