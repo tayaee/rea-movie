@@ -384,6 +384,7 @@ fn execute_tool(name: &str, args: &Value) -> Result<String> {
                 .and_then(|v| v.as_str())
                 .unwrap_or(".");
             let proj_dir = Path::new(proj_dir_str);
+            let media_dir = crate::config::resolve_media_root(proj_dir);
 
             let timeline_path = proj_dir.join("timeline.json");
             let mut shots_summary = Vec::new();
@@ -391,13 +392,13 @@ fn execute_tool(name: &str, args: &Value) -> Result<String> {
             if timeline_path.is_file() {
                 let manifest = TimelineManifest::load_from_file(&timeline_path)?;
                 for shot in manifest.shots {
-                    let shot_dir = proj_dir.join("shots").join(&shot.shot_id);
-                    let prod_exists = shot_dir
+                    let media_shot_dir = media_dir.join("shots").join(&shot.shot_id);
+                    let prod_exists = media_shot_dir
                         .join("renders")
                         .join("prod")
                         .join(format!("{}.mp4", shot.shot_id))
                         .is_file();
-                    let smoke_exists = shot_dir
+                    let smoke_exists = media_shot_dir
                         .join("renders")
                         .join("smoke")
                         .join(format!("{}.mp4", shot.shot_id))
@@ -423,12 +424,13 @@ fn execute_tool(name: &str, args: &Value) -> Result<String> {
                                 if name.starts_with("shot_") {
                                     let meta_file = path.join("shot.toml");
                                     let meta = ShotMeta::load_from_file(&meta_file).ok();
-                                    let prod_exists = path
+                                    let media_shot_dir = media_dir.join("shots").join(name);
+                                    let prod_exists = media_shot_dir
                                         .join("renders")
                                         .join("prod")
                                         .join(format!("{}.mp4", name))
                                         .is_file();
-                                    let smoke_exists = path
+                                    let smoke_exists = media_shot_dir
                                         .join("renders")
                                         .join("smoke")
                                         .join(format!("{}.mp4", name))

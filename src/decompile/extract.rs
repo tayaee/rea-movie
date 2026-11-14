@@ -5,7 +5,7 @@ use std::process::Command;
 use crate::decompile::contact_sheet::generate_contact_sheet;
 
 pub struct ShotExtractPaths<'a> {
-    pub shot_dir: &'a Path,
+    pub media_shot_dir: &'a Path,
     pub original_clip: &'a Path,
     pub original_audio: &'a Path,
     pub first_frame: &'a Path,
@@ -25,8 +25,11 @@ pub fn extract_shot_references(
     if let Some(parent) = paths.original_clip.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let prod_dir = paths.shot_dir.join("renders").join("prod");
-    let smoke_dir = paths.shot_dir.join("renders").join("smoke");
+    if let Some(parent) = paths.first_frame.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let prod_dir = paths.media_shot_dir.join("renders").join("prod");
+    let smoke_dir = paths.media_shot_dir.join("renders").join("smoke");
     std::fs::create_dir_all(&prod_dir)?;
     std::fs::create_dir_all(&smoke_dir)?;
 

@@ -32,7 +32,8 @@ pub fn run_assemble(opts: AssembleOptions) -> Result<()> {
     }
     println!("==> Assembling {} shot(s) for movie: {}", shots.len(), movie_name);
 
-    let output_dir = opts.proj_dir.join("outputs").join(profile);
+    let media_dir = crate::config::resolve_media_root(opts.proj_dir);
+    let output_dir = media_dir.join("outputs").join(profile);
     fs::create_dir_all(&output_dir)
         .with_context(|| format!("Failed to create output directory: {:?}", output_dir))?;
 
@@ -106,14 +107,15 @@ fn collect_assemble_shots(proj_dir: &Path, profile: &str) -> Result<Vec<Assemble
     shot_ids.sort_by_key(|id| shot_number(id));
     shot_ids.dedup();
 
+    let media_dir = crate::config::resolve_media_root(&proj_dir);
     let mut assemble_shots = Vec::with_capacity(shot_ids.len());
     for shot_id in shot_ids {
-        let shot_dir = proj_dir.join("shots").join(&shot_id);
-        let render_video = shot_dir
+        let media_shot_dir = media_dir.join("shots").join(&shot_id);
+        let render_video = media_shot_dir
             .join("renders")
             .join(profile)
             .join(format!("{}.mp4", shot_id));
-        let orig_clip = shot_dir.join("refs").join("original_clip.mp4");
+        let orig_clip = media_shot_dir.join("refs").join("original_clip.mp4");
 
         if !render_video.is_file() || fs::metadata(&render_video)?.len() == 0 {
             bail!(

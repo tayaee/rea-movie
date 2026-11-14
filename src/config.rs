@@ -1,6 +1,35 @@
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
+
+/// Resolves the workspace media root for heavy video/audio files (`original_clip.mp4`,
+/// `original_audio.wav`, `renders/`, `outputs/`).
+///
+/// When a project lives under `.../rea-movie-projects/<project_name>`, its media and
+/// rendered video outputs are separated into `../rea-movie-workspace/<project_name>`
+/// (`.../rea-movie-workspace/<project_name>`) so that the project directory itself remains
+/// lightweight and directly committable to a Git repository without `.mkv`/`.mp4`/`.wav` binaries.
+pub fn resolve_media_root(proj_dir: &Path) -> PathBuf {
+    let resolved = std::fs::canonicalize(proj_dir).unwrap_or_else(|_| {
+        if proj_dir.is_absolute() {
+            proj_dir.to_path_buf()
+        } else {
+            std::env::current_dir()
+                .map(|cwd| cwd.join(proj_dir))
+                .unwrap_or_else(|_| proj_dir.to_path_buf())
+        }
+    });
+    if let Some(proj_name) = resolved.file_name() {
+        if let Some(parent) = resolved.parent() {
+            if parent.file_name().and_then(|n| n.to_str()) == Some("rea-movie-projects") {
+                if let Some(grandparent) = parent.parent() {
+                    return grandparent.join("rea-movie-workspace").join(proj_name);
+                }
+            }
+        }
+    }
+    proj_dir.to_path_buf()
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProjectConfig {
@@ -159,5 +188,18 @@ mod tests {
             deserialized.pool.remote_workspace,
             "/rosenas/data/rea-movie-workspace"
         );
+    }
+
+    #[test]
+    fn test_resolve_media_root_separates_projects_and_workspace() {
+        let proj = Path::new("/rosenas/data/rea-movie-projects/breakingbad-s5e7");
+        let media = resolve_media_root(proj);
+        assert_eq!(
+            media,
+            PathBuf::from("/rosenas/data/rea-movie-workspace/breakingbad-s5e7")
+        );
+
+        let standalone = Path::new("/tmp/test_movie_proj");
+        assert_eq!(resolve_media_root(standalone), standalone.to_path_buf());
     }
 }

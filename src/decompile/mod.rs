@@ -41,7 +41,7 @@ pub fn run_decompile(opts: DecompileOptions) -> Result<PathBuf> {
     let input_abs = std::fs::canonicalize(input_path)?;
     let input_str = input_abs.to_string_lossy().to_string();
 
-    // 1. Determine project directory
+    // 1. Determine project directory (default: /rosenas/data/rea-movie-projects/<stem>)
     let proj_dir: PathBuf = match opts.output_dir {
         Some(out) => PathBuf::from(out),
         None => {
@@ -49,11 +49,11 @@ pub fn run_decompile(opts: DecompileOptions) -> Result<PathBuf> {
                 .file_stem()
                 .and_then(|s| s.to_str())
                 .unwrap_or("movie_project");
-            let workspace_root = std::env::var("REA_MOVIE_WORKSPACE")
-                .unwrap_or_else(|_| "/rosenas/data/rea-movie-workspace".to_string());
-            let ws_projects = PathBuf::from(&workspace_root).join("projects");
-            if std::fs::create_dir_all(&ws_projects).is_ok() {
-                ws_projects.join(stem)
+            let projects_root = std::env::var("REA_MOVIE_PROJECTS")
+                .unwrap_or_else(|_| "/rosenas/data/rea-movie-projects".to_string());
+            let projects_dir = PathBuf::from(&projects_root);
+            if std::fs::create_dir_all(&projects_dir).is_ok() {
+                projects_dir.join(stem)
             } else {
                 PathBuf::from(format!("./{}", stem))
             }
@@ -62,6 +62,20 @@ pub fn run_decompile(opts: DecompileOptions) -> Result<PathBuf> {
 
     std::fs::create_dir_all(&proj_dir)
         .with_context(|| format!("Failed to create project directory at {:?}", proj_dir))?;
+
+    let media_dir = crate::config::resolve_media_root(&proj_dir);
+    std::fs::create_dir_all(&media_dir)
+        .with_context(|| format!("Failed to create media workspace directory at {:?}", media_dir))?;
+
+    if media_dir != proj_dir {
+        let gitignore_path = proj_dir.join(".gitignore");
+        if !gitignore_path.exists() {
+            let _ = std::fs::write(
+                &gitignore_path,
+                "# Heavy video/audio assets & renders are stored in ../rea-movie-workspace/\n*.mp4\n*.mkv\n*.wav\n/outputs/\n**/renders/\n",
+            );
+        }
+    }
 
     let max_dur = opts.max_shot_duration.unwrap_or(8.0);
     let total_dur = probe_video_duration(&input_str).unwrap_or(0.0);
@@ -117,6 +131,8 @@ pub fn run_decompile(opts: DecompileOptions) -> Result<PathBuf> {
     // 5. Process each shot
     let shots_dir = proj_dir.join("shots");
     std::fs::create_dir_all(&shots_dir)?;
+    let media_shots_dir = media_dir.join("shots");
+    std::fs::create_dir_all(&media_shots_dir)?;
 
     let subtitle_cues = story::load_subtitle_cues(&input_str);
     let has_subtitle_track = !subtitle_cues.is_empty();
@@ -129,14 +145,18 @@ pub fn run_decompile(opts: DecompileOptions) -> Result<PathBuf> {
         let refs_dir = shot_dir.join("refs");
         std::fs::create_dir_all(&refs_dir)?;
 
-        let original_clip = refs_dir.join("original_clip.mp4");
-        let original_audio = refs_dir.join("original_audio.wav");
+        let media_shot_dir = media_shots_dir.join(&span.shot_id);
+        let media_refs_dir = media_shot_dir.join("refs");
+        std::fs::create_dir_all(&media_refs_dir)?;
+
+        let original_clip = media_refs_dir.join("original_clip.mp4");
+        let original_audio = media_refs_dir.join("original_audio.wav");
         let first_frame = refs_dir.join("first_frame.jpg");
         let last_frame = refs_dir.join("last_frame.jpg");
         let contact_sheet = refs_dir.join("contact_sheet.jpg");
 
         let extract_paths = ShotExtractPaths {
-            shot_dir: &shot_dir,
+            media_shot_dir: &media_shot_dir,
             original_clip: &original_clip,
             original_audio: &original_audio,
             first_frame: &first_frame,
@@ -212,12 +232,15 @@ pub fn run_decompile(opts: DecompileOptions) -> Result<PathBuf> {
     }
 
     // 6. Story & Character assets
-    generate_story_assets(&proj_dir, spans.len(), total_dur, Some(&input_str))?;
+    generate_story_assets(&proj_dir, &media_dir, spans.len(), total_dur, Some(&input_str))?;
 
     // 7. run.sh
     generate_run_script(&proj_dir)?;
 
     println!("==> Project decompile complete at: {:?}", proj_dir);
+    if media_dir != proj_dir {
+        println!("==> Media workspace (clips & render outputs) separated at: {:?}", media_dir);
+    }
 
     // 8. If --run flag, invoke render and assemble
     if opts.run_after {

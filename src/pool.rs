@@ -398,7 +398,7 @@ pub fn discover_endpoints(config: &PoolConfig) -> Vec<PoolEndpoint> {
             .or_else(|| cached_node_state(&workspace, node));
 
         if let Some(state) = state {
-            if state.status != "configured" && tcp_port_open(&state.host, state.port) {
+            if state.status != "configured" && endpoint_ready(&state.host, state.port) {
                 endpoints.push(PoolEndpoint {
                     host: state.host.clone(),
                     port: state.port,
@@ -409,7 +409,7 @@ pub fn discover_endpoints(config: &PoolConfig) -> Vec<PoolEndpoint> {
         }
 
         for port in config.base_port..config.base_port.saturating_add(PORT_SCAN_LIMIT) {
-            if tcp_port_open(node, port) {
+            if endpoint_ready(node, port) {
                 endpoints.push(PoolEndpoint {
                     host: node.clone(),
                     port,
@@ -470,6 +470,23 @@ pub fn request_engine_switch(
 
 fn discover_open_port(node: &str, base_port: u16) -> Option<u16> {
     (base_port..base_port.saturating_add(PORT_SCAN_LIMIT)).find(|&port| tcp_port_open(node, port))
+}
+
+fn endpoint_ready(host: &str, port: u16) -> bool {
+    if !tcp_port_open(host, port) {
+        return false;
+    }
+    if is_local_host(host) {
+        return true;
+    }
+    let url = format!("http://{}:{}/health", host, port);
+    reqwest::blocking::Client::builder()
+        .timeout(Duration::from_millis(800))
+        .build()
+        .ok()
+        .and_then(|client| client.get(&url).send().ok())
+        .map(|resp| resp.status().is_success())
+        .unwrap_or(false)
 }
 
 fn tcp_port_open(host: &str, port: u16) -> bool {

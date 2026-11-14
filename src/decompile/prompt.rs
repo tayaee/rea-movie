@@ -1,5 +1,8 @@
 use anyhow::{Context, Result};
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+static MINIMAX_API_DISABLED: AtomicBool = AtomicBool::new(false);
 
 #[allow(dead_code)]
 pub struct PromptGenContext<'a> {
@@ -36,10 +39,19 @@ pub fn generate_prompts(
     let mut generated_h3 = None;
 
     let api_key = std::env::var("MINIMAX_API_KEY").ok();
-    if !ctx.offline && api_key.is_some() && ctx.contact_sheet_path.exists() {
-        if let Ok((ko, h3)) = try_minimax_m3_api(ctx, api_key.as_deref().unwrap().trim()) {
-            generated_ko = Some(ko);
-            generated_h3 = Some(h3);
+    if !ctx.offline
+        && !MINIMAX_API_DISABLED.load(Ordering::Relaxed)
+        && api_key.as_deref().map(|k| !k.trim().is_empty()).unwrap_or(false)
+        && ctx.contact_sheet_path.exists()
+    {
+        match try_minimax_m3_api(ctx, api_key.as_deref().unwrap().trim()) {
+            Ok((ko, h3)) => {
+                generated_ko = Some(ko);
+                generated_h3 = Some(h3);
+            }
+            Err(_) => {
+                MINIMAX_API_DISABLED.store(true, Ordering::Relaxed);
+            }
         }
     }
 

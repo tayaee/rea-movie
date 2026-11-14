@@ -413,7 +413,10 @@ fn render_shot(
     behavior: RenderBehavior,
 ) -> Result<()> {
     let shot_dir = proj_dir.join("shots").join(&shot.shot_id);
-    let target = shot_dir
+    let media_dir = crate::config::resolve_media_root(proj_dir);
+    let target = media_dir
+        .join("shots")
+        .join(&shot.shot_id)
         .join("renders")
         .join(profile_name)
         .join(format!("{}.mp4", shot.shot_id));
@@ -692,6 +695,9 @@ fn audio_part(path: &Path, file_name: &str) -> Result<Part> {
 
 fn character_reference_paths(proj_dir: &Path, characters: &[String]) -> Result<(PathBuf, PathBuf)> {
     let root = proj_dir.join("assets").join("characters");
+    let media_root = crate::config::resolve_media_root(proj_dir)
+        .join("assets")
+        .join("characters");
     let fallback = "S1".to_string();
     let requested = if characters.is_empty() {
         vec![&fallback]
@@ -716,8 +722,18 @@ fn character_reference_paths(proj_dir: &Path, characters: &[String]) -> Result<(
             .map(|entry| entry.path())
             .unwrap_or(direct);
 
+        let dir_name = matching
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(character);
         let face = matching.join("face.jpg");
-        let voice = matching.join("voice.wav");
+        let voice_in_proj = matching.join("voice.wav");
+        let voice_in_media = media_root.join(dir_name).join("voice.wav");
+        let voice = if voice_in_proj.is_file() {
+            voice_in_proj
+        } else {
+            voice_in_media
+        };
         if face.is_file() && voice.is_file() {
             return Ok((face, voice));
         }

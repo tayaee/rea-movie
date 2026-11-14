@@ -113,6 +113,7 @@ pub fn cues_for_span(cues: &[SubtitleCue], start_sec: f64, end_sec: f64) -> Vec<
 
 pub fn generate_story_assets(
     proj_dir: &Path,
+    media_dir: &Path,
     shot_count: usize,
     total_duration: f64,
     input_video_path: Option<&str>,
@@ -177,7 +178,7 @@ It contains {} sequential camera shots.
         }
     }
 
-    // assets/characters/S1_narrator/face.jpg, voice.wav
+    // assets/characters/S1_narrator/face.jpg in proj_dir, voice.wav in media_dir
     let char_s1_dir = proj_dir.join("assets").join("characters").join("S1_narrator");
     std::fs::create_dir_all(&char_s1_dir)?;
 
@@ -187,7 +188,9 @@ It contains {} sequential camera shots.
         let _ = img.save(&face_path);
     }
 
-    let voice_path = char_s1_dir.join("voice.wav");
+    let media_char_s1_dir = media_dir.join("assets").join("characters").join("S1_narrator");
+    std::fs::create_dir_all(&media_char_s1_dir)?;
+    let voice_path = media_char_s1_dir.join("voice.wav");
     if !voice_path.exists() {
         let spec = hound::WavSpec {
             channels: 1,
