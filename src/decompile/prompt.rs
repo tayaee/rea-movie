@@ -101,8 +101,7 @@ fn try_minimax_m3_api(ctx: &PromptGenContext, api_key: &str) -> Result<(String, 
                     }
                 ]
             }
-        ],
-        "response_format": { "type": "json_object" }
+        ]
     });
 
     let resp = client
@@ -119,7 +118,18 @@ fn try_minimax_m3_api(ctx: &PromptGenContext, api_key: &str) -> Result<(String, 
     let text = json_val["choices"][0]["message"]["content"].as_str()
         .context("Missing content in MiniMax M3 response")?;
 
-    let parsed: serde_json::Value = serde_json::from_str(text)?;
+    let cleaned = text
+        .trim()
+        .trim_start_matches("```json")
+        .trim_start_matches("```")
+        .trim_end_matches("```")
+        .trim();
+    let json_slice = match (cleaned.find('{'), cleaned.rfind('}')) {
+        (Some(s), Some(e)) if e > s => &cleaned[s..=e],
+        _ => cleaned,
+    };
+
+    let parsed: serde_json::Value = serde_json::from_str(json_slice)?;
     let ko = parsed["prompt_ko"].as_str().context("Missing prompt_ko")?.to_string();
     let h3 = parsed["prompt_h3"].as_str().context("Missing prompt_h3")?.to_string();
 

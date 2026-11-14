@@ -76,7 +76,7 @@ pub fn detect_scene_cuts(video_path: &str, start_bound: f64, end_bound: f64) -> 
             "-ss", &format!("{:.3}", start_bound),
             "-to", &format!("{:.3}", end_bound),
             "-i", video_path,
-            "-filter_complex", "select='gt(scene,0.25)',showinfo",
+            "-filter_complex", "select='gt(scene,0.14)',showinfo",
             "-f", "null",
             "-",
         ])

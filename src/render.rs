@@ -92,21 +92,67 @@ pub fn run_render(opts: RenderOptions) -> Result<()> {
             println!("==> Engine group {} -> {}", engine.as_str(), urls);
         }
 
-        for (index, shot) in group.into_iter().enumerate() {
-            let endpoint = if endpoints.is_empty() {
-                None
-            } else {
-                endpoints.get(index % endpoints.len())
-            };
-            render_shot(
-                opts.proj_dir,
-                profile_name,
-                &profile,
-                &shot,
-                endpoint,
-                mock_h3,
-                behavior,
-            )?;
+        if mock_h3 || endpoints.len() <= 1 {
+            let endpoint = endpoints.first();
+            for shot in group {
+                render_shot(
+                    opts.proj_dir,
+                    profile_name,
+                    &profile,
+                    &shot,
+                    endpoint,
+                    mock_h3,
+                    behavior,
+                )?;
+            }
+        } else {
+            // Parallel multi-node dispatch: spawn exactly 1 worker thread per
+            // DGX Spark endpoint so each GB10 node stays single-tenant (no OOM)
+            // while all available nodes render simultaneously in parallel.
+            let queue = std::sync::Mutex::new(std::collections::VecDeque::from(group));
+            let first_err: std::sync::Mutex<Option<anyhow::Error>> = std::sync::Mutex::new(None);
+            std::thread::scope(|s| {
+                for endpoint in &endpoints {
+                    let queue_ref = &queue;
+                    let err_ref = &first_err;
+                    let proj_dir = opts.proj_dir;
+                    let profile_ref = &profile;
+                    s.spawn(move || loop {
+                        if err_ref.lock().unwrap().is_some() {
+                            break;
+                        }
+                        let next_shot = {
+                            let mut q = queue_ref.lock().unwrap();
+                            q.pop_front()
+                        };
+                        let Some(shot) = next_shot else {
+                            break;
+                        };
+                        println!(
+                            "==> [Worker {}:{}] Rendering {}...",
+                            endpoint.host, endpoint.port, shot.shot_id
+                        );
+                        if let Err(e) = render_shot(
+                            proj_dir,
+                            profile_name,
+                            profile_ref,
+                            &shot,
+                            Some(endpoint),
+                            mock_h3,
+                            behavior,
+                        ) {
+                            let mut slot = err_ref.lock().unwrap();
+                            if slot.is_none() {
+                                *slot = Some(e);
+                            }
+                            break;
+                        }
+                    });
+                }
+            });
+            if let Some(err) = first_err.into_inner().unwrap() {
+                return Err(err);
+            }
         }
     }
 
@@ -555,9 +601,10 @@ fn request_h3(
         other => bail!("Unsupported shot anchor: {other}"),
     };
 
+    let h3_duration = shot.duration.clamp(4.0, 15.0);
     let mut extra_params = json!({
         "task": task,
-        "duration": shot.duration,
+        "duration": h3_duration,
         "audio_flow_shift": profile.audio_flow_shift,
     });
     if shot.anchor == "first_and_last" {

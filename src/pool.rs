@@ -398,7 +398,7 @@ pub fn discover_endpoints(config: &PoolConfig) -> Vec<PoolEndpoint> {
             .or_else(|| cached_node_state(&workspace, node));
 
         if let Some(state) = state {
-            if state.status != "configured" {
+            if state.status != "configured" && tcp_port_open(&state.host, state.port) {
                 endpoints.push(PoolEndpoint {
                     host: state.host.clone(),
                     port: state.port,
