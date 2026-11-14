@@ -60,6 +60,10 @@ pub struct DecompileArgs {
     /// Run in offline mode without calling MiniMax vision API
     #[arg(long = "offline")]
     pub offline: bool,
+
+    /// Target dubbing language for generated dialogue (e.g. 'ko' or 'en', default: 'en')
+    #[arg(long = "dub-lang", visible_alias = "lang", default_value = "en")]
+    pub dub_lang: String,
 }
 
 #[derive(Debug, Args)]

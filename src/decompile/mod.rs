@@ -26,6 +26,7 @@ pub struct DecompileOptions<'a> {
     pub run_after: bool,
     pub smoke: bool,
     pub offline: bool,
+    pub dub_lang: Option<&'a str>,
 }
 
 pub fn run_decompile(opts: DecompileOptions) -> Result<PathBuf> {
@@ -116,6 +117,10 @@ pub fn run_decompile(opts: DecompileOptions) -> Result<PathBuf> {
     let shots_dir = proj_dir.join("shots");
     std::fs::create_dir_all(&shots_dir)?;
 
+    let subtitle_cues = story::load_subtitle_cues(&input_str);
+    let has_subtitle_track = !subtitle_cues.is_empty();
+    let dub_lang = opts.dub_lang.unwrap_or("en");
+
     for span in &spans {
         let shot_dir = shots_dir.join(&span.shot_id);
         std::fs::create_dir_all(&shot_dir)?;
@@ -182,6 +187,7 @@ pub fn run_decompile(opts: DecompileOptions) -> Result<PathBuf> {
         // Prompts
         let ko_path = shot_dir.join("prompt.ko.md");
         let h3_path = shot_dir.join("prompt.h3.txt");
+        let span_subtitles = story::cues_for_span(&subtitle_cues, span.start_sec, span.end_sec);
 
         let prompt_ctx = PromptGenContext {
             shot_id: &span.shot_id,
@@ -195,13 +201,16 @@ pub fn run_decompile(opts: DecompileOptions) -> Result<PathBuf> {
             contact_sheet_path: &contact_sheet,
             offline: opts.offline,
             force: opts.force,
+            dub_lang,
+            subtitle_lines: &span_subtitles,
+            has_subtitle_track,
         };
 
         generate_prompts(&prompt_ctx, &ko_path, &h3_path)?;
     }
 
     // 6. Story & Character assets
-    generate_story_assets(&proj_dir, spans.len(), total_dur)?;
+    generate_story_assets(&proj_dir, spans.len(), total_dur, Some(&input_str))?;
 
     // 7. run.sh
     generate_run_script(&proj_dir)?;

@@ -30,6 +30,7 @@ fn main() -> Result<()> {
                 run_after: args.run,
                 smoke: args.smoke,
                 offline: args.offline,
+                dub_lang: Some(&args.dub_lang),
             };
             run_decompile(opts)?;
         }
