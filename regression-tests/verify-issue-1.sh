@@ -37,6 +37,7 @@ echo "== [Verify Issue 1] Checking generated project layout =="
 
 grep -q "spark1.local" "$PROJ_DIR/rea-movie.toml" || { echo "FAIL: spark1.local missing in rea-movie.toml"; exit 1; }
 grep -q "spark2.local" "$PROJ_DIR/rea-movie.toml" || { echo "FAIL: spark2.local missing in rea-movie.toml"; exit 1; }
+grep -q "rea-movie-workspace" "$PROJ_DIR/rea-movie.toml" || { echo "FAIL: ~/rea-movie-workspace missing in rea-movie.toml"; exit 1; }
 
 SHOT1_DIR="$PROJ_DIR/shots/shot_0001"
 [ -d "$SHOT1_DIR" ] || { echo "FAIL: $SHOT1_DIR missing"; exit 1; }
