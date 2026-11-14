@@ -47,8 +47,14 @@ pub fn run_decompile(opts: DecompileOptions) -> Result<PathBuf> {
                 .file_stem()
                 .and_then(|s| s.to_str())
                 .unwrap_or("movie_project");
-            let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S").to_string();
-            PathBuf::from(format!("./{}_{}", stem, timestamp))
+            let workspace_root = std::env::var("REA_MOVIE_WORKSPACE")
+                .unwrap_or_else(|_| "/rosenas/data/rea-movie-workspace".to_string());
+            let ws_projects = PathBuf::from(&workspace_root).join("projects");
+            if std::fs::create_dir_all(&ws_projects).is_ok() {
+                ws_projects.join(stem)
+            } else {
+                PathBuf::from(format!("./{}", stem))
+            }
         }
     };
 

@@ -31,14 +31,14 @@
 ### 1. 영화 역공학 프로젝트 생성 (`decompile`)
 
 ```bash
-# [기본] mkv/mp4 파일을 입력하면 ./robocop 폴더에 역공학 프로젝트 생성
-rea-movie robocop.mkv
+# [기본] -o 옵션 생략 시 공유 워크스페이스(/rosenas/data/rea-movie-workspace/projects/<영화이름>)에 프로젝트 자동 생성
+rea-movie /rosenas/data/rea-movie-workspace/sample_movies/02_superman_mad_scientist_1941.mp4
 
 # [구간 지정] 01분 00초 ~ 02분 30초 구간만 역공학 프로젝트 생성
-rea-movie robocop.mkv --range 00:01:00-00:02:30 -o ./robocop
+rea-movie /rosenas/data/rea-movie-workspace/sample_movies/01_charade_1963.mp4 --range 00:01:00-00:02:30
 
 # [원스톱 실행] 프로젝트 생성 후 곧바로 Prod 전체 렌더링 + 비교 영상 조립까지 실행
-rea-movie robocop.mkv --range 00:01:00-00:02:30 --run
+rea-movie /rosenas/data/rea-movie-workspace/sample_movies/02_superman_mad_scientist_1941.mp4 --range 00:00:30-00:02:00 --run
 ```
 
 ### 2. 전체 영화 생성 (Prod 본편 vs Smoke 스토리 체크)
