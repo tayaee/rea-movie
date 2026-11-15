@@ -24,6 +24,9 @@ pub enum Commands {
     Assemble(AssembleArgs),
     /// Manage DGX Spark server pool
     Pool(PoolArgs),
+    // Section 3.8: Customize subcommand
+    /// Manage prompt customization layer (characters, traits, and shot overrides)
+    Customize(CustomizeArgs),
     /// Run MCP (Model Context Protocol) stdio server
     Mcp,
 }
@@ -139,4 +142,58 @@ pub struct PoolArgs {
 
     #[command(subcommand)]
     pub command: crate::pool::PoolCommands,
+}
+
+// Section 3.8: Customize subcommand definitions
+#[derive(Debug, Args)]
+pub struct CustomizeArgs {
+    #[command(subcommand)]
+    pub command: CustomizeCommands,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum CustomizeCommands {
+    /// Re-apply customization blocks to prompt.ko.md and prompt.h3.txt (idempotent)
+    Apply(CustomizeApplyArgs),
+    /// Show summary of characters, traits, and shot casts
+    Show(CustomizeShowArgs),
+    /// Composite character props (e.g. cap_ref) onto anchor frames
+    Anchor(CustomizeAnchorArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct CustomizeApplyArgs {
+    /// Path to project directory (default: current directory)
+    #[arg(long = "proj-dir", default_value = ".")]
+    pub proj_dir: PathBuf,
+
+    /// Target shot ID (e.g. 0015 or shot_0015)
+    #[arg(long = "shot")]
+    pub shot: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct CustomizeShowArgs {
+    /// Path to project directory (default: current directory)
+    #[arg(long = "proj-dir", default_value = ".")]
+    pub proj_dir: PathBuf,
+}
+
+#[derive(Debug, Args)]
+pub struct CustomizeAnchorArgs {
+    /// Path to project directory (default: current directory)
+    #[arg(long = "proj-dir", default_value = ".")]
+    pub proj_dir: PathBuf,
+
+    /// Target shot ID (e.g. 0015 or shot_0015)
+    #[arg(long = "shot")]
+    pub shot: Option<String>,
+
+    /// Target character ID (e.g. walter)
+    #[arg(long = "character")]
+    pub character: Option<String>,
+
+    /// Force re-edit already edited frames
+    #[arg(long = "force", default_value_t = false)]
+    pub force: bool,
 }

@@ -1,6 +1,9 @@
+mod anchor;
 mod assemble;
 mod cli;
 mod config;
+// Section 3.1: Customization module
+mod customize;
 mod decompile;
 mod mcp;
 mod pool;
@@ -65,6 +68,35 @@ fn main() -> Result<()> {
         Commands::Pool(args) => {
             pool::run_pool_in(args.command, &args.proj_dir)?;
         }
+        // Section 3.8: Customize CLI command handling
+        Commands::Customize(args) => match args.command {
+            cli::CustomizeCommands::Apply(apply_args) => {
+                let modified =
+                    customize::run_apply(&apply_args.proj_dir, apply_args.shot.as_deref())?;
+                println!(
+                    "==> Applied customization to {} shots in {:?}",
+                    modified.len(),
+                    apply_args.proj_dir
+                );
+            }
+            cli::CustomizeCommands::Show(show_args) => {
+                let summary = customize::generate_show_summary(&show_args.proj_dir)?;
+                print!("{}", summary);
+            }
+            cli::CustomizeCommands::Anchor(anchor_args) => {
+                let edited = anchor::run_anchor_edit(
+                    &anchor_args.proj_dir,
+                    anchor_args.shot.as_deref(),
+                    anchor_args.character.as_deref(),
+                    anchor_args.force,
+                )?;
+                println!(
+                    "==> Processed anchor edits for {} shot(s) in {:?}",
+                    edited.len(),
+                    anchor_args.proj_dir
+                );
+            }
+        },
         Commands::Mcp => {
             mcp::run_mcp_server()?;
         }
@@ -85,6 +117,7 @@ fn normalize_cli_args(args: Vec<String>) -> Vec<String> {
         "sync-prompt",
         "assemble",
         "pool",
+        "customize",
         "mcp",
         "help",
         "--help",

@@ -77,18 +77,13 @@ pub fn compile_ko_to_h3(ko_prompt: &str, meta: &ShotMeta) -> Result<String> {
             "No intrusive non-diegetic music; preserve the scene ambience.".to_string()
         });
 
-    let mut integrated = if integrated.is_empty() {
+    let integrated = if integrated.is_empty() {
         ko_prompt.trim().to_string()
     } else {
         integrated.join("\n")
     };
-    if (ko_prompt.to_ascii_lowercase().contains("kbo") || ko_prompt.contains("야구모자"))
-        && !integrated.contains("Korean Baseball Organization")
-    {
-        integrated.push_str(
-            "\nIMPORTANT VISUAL MODIFICATION: The main protagonist prominently wears a navy-and-red KBO (Korean Baseball Organization) baseball cap with a bold white embroidered 'KBO' emblem on his head throughout the entire shot.",
-        );
-    }
+    // Section 3.7: Removed hardcoded "kbo"/"야구모자" branching.
+    // Trait injection is handled uniformly via customization blocks.
 
     Ok(format!(
         "{reference_line}\n\nintegrated_multimodal_description:\nFrom 0.0s to {:.2}s, maintain the camera, character action, expression, dialogue, and environmental continuity described below.\n{integrated}\n\noverall_soundscape:\n{soundscape}\n\nnon_diegetic_music:\n{music}\n",
@@ -96,15 +91,78 @@ pub fn compile_ko_to_h3(ko_prompt: &str, meta: &ShotMeta) -> Result<String> {
     ))
 }
 
-/// Compile `prompt.ko.md` in place into `prompt.h3.txt`.
+// Section 3.6: Recompile prompt files with customization layer and M3 translation
 pub fn compile_prompt_file(shot_dir: &Path, meta: &ShotMeta) -> Result<()> {
+    let proj_dir = shot_dir
+        .parent()
+        .and_then(|p| p.parent())
+        .unwrap_or(shot_dir);
+    let custom = crate::customize::Customization::load(proj_dir);
+    let cast = custom.cast_for(&meta.shot_id, &meta.characters);
+    let blocks = custom.blocks_for(&meta.shot_id, &cast);
+
     let ko_path = shot_dir.join("prompt.ko.md");
     let h3_path = shot_dir.join("prompt.h3.txt");
-    let ko_prompt = std::fs::read_to_string(&ko_path)
-        .with_context(|| format!("Failed to read {}", ko_path.display()))?;
-    let h3_prompt = compile_ko_to_h3(&ko_prompt, meta)?;
-    std::fs::write(&h3_path, h3_prompt)
-        .with_context(|| format!("Failed to write {}", h3_path.display()))?;
+
+    let base_ko = if ko_path.is_file() {
+        let ko_raw = std::fs::read_to_string(&ko_path)
+            .with_context(|| format!("Failed to read {}", ko_path.display()))?;
+        let base = crate::customize::extract_base(&ko_raw);
+        let updated_ko = crate::customize::apply_to_ko(&base, &blocks);
+        std::fs::write(&ko_path, updated_ko)
+            .with_context(|| format!("Failed to write {}", ko_path.display()))?;
+        base
+    } else {
+        String::new()
+    };
+
+    let api_key = std::env::var("MINIMAX_API_KEY").ok();
+    let has_api_key = api_key
+        .as_deref()
+        .map(|k| !k.trim().is_empty())
+        .unwrap_or(false);
+
+    let mut compiled_new_h3 = false;
+    if has_api_key && !base_ko.is_empty() {
+        match crate::decompile::prompt::translate_ko_base_to_h3_m3(
+            &base_ko,
+            meta,
+            api_key.as_deref().unwrap().trim(),
+        ) {
+            Ok(h3_from_m3) => {
+                let base_h3 = crate::customize::extract_base(&h3_from_m3);
+                let final_h3 = crate::customize::apply_to_h3(&base_h3, &blocks);
+                std::fs::write(&h3_path, final_h3)
+                    .with_context(|| format!("Failed to write {}", h3_path.display()))?;
+                compiled_new_h3 = true;
+            }
+            Err(e) => {
+                eprintln!(
+                    "Warning: MiniMax-M3 API translation failed for shot {}: {:#}; preserving existing base",
+                    meta.shot_id, e
+                );
+            }
+        }
+    }
+
+    if !compiled_new_h3 {
+        // Section 3.6: When API is unavailable, preserve existing prompt.h3.txt base and only refresh custom blocks
+        if h3_path.is_file() {
+            let existing_h3 = std::fs::read_to_string(&h3_path)
+                .with_context(|| format!("Failed to read {}", h3_path.display()))?;
+            let base_h3 = crate::customize::extract_base(&existing_h3);
+            let final_h3 = crate::customize::apply_to_h3(&base_h3, &blocks);
+            std::fs::write(&h3_path, final_h3)
+                .with_context(|| format!("Failed to write {}", h3_path.display()))?;
+        } else {
+            let compiled = compile_ko_to_h3(&base_ko, meta)?;
+            let base_h3 = crate::customize::extract_base(&compiled);
+            let final_h3 = crate::customize::apply_to_h3(&base_h3, &blocks);
+            std::fs::write(&h3_path, final_h3)
+                .with_context(|| format!("Failed to write {}", h3_path.display()))?;
+        }
+    }
+
     Ok(())
 }
 

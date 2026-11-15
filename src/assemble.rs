@@ -1,4 +1,5 @@
 use anyhow::{bail, Context, Result};
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -13,10 +14,11 @@ pub struct AssembleOptions<'a> {
 }
 
 #[derive(Debug, Clone)]
-struct AssembleShot {
-    shot_id: String,
-    render_video: PathBuf,
-    orig_clip: PathBuf,
+pub struct AssembleShot {
+    pub shot_id: String,
+    pub render_video: PathBuf,
+    pub orig_clip: PathBuf,
+    pub duration: Option<f64>,
 }
 
 pub fn run_assemble(opts: AssembleOptions) -> Result<()> {
@@ -44,16 +46,27 @@ pub fn run_assemble(opts: AssembleOptions) -> Result<()> {
     let final_movie_path = output_dir.join(format!("{}_{}.mp4", movie_name, profile));
     let compare_movie_path = output_dir.join(format!("{}_compare.mp4", movie_name));
 
-    // 1. Assemble final movie
-    assemble_final_movie(&shots, &final_movie_path, &output_dir)?;
-    println!("==> Final movie created: {}", final_movie_path.display());
+    let trim_dir = output_dir.join(".trim");
+    let assemble_result = (|| -> Result<()> {
+        // 1. Assemble final movie
+        assemble_final_movie(&shots, &final_movie_path, &output_dir)?;
+        println!("==> Final movie created: {}", final_movie_path.display());
 
-    // 2. Assemble side-by-side compare video
-    assemble_compare_movie(&shots, &compare_movie_path, &output_dir)?;
-    println!(
-        "==> Compare movie created: {}",
-        compare_movie_path.display()
-    );
+        // 2. Assemble side-by-side compare video
+        assemble_compare_movie(&shots, &compare_movie_path, &output_dir)?;
+        println!(
+            "==> Compare movie created: {}",
+            compare_movie_path.display()
+        );
+        Ok(())
+    })();
+
+    // Always clean up temporary .trim directory
+    if trim_dir.exists() {
+        let _ = fs::remove_dir_all(&trim_dir);
+    }
+
+    assemble_result?;
 
     println!("==> Assemble complete for profile: {}", profile);
     Ok(())
@@ -88,12 +101,14 @@ fn collect_assemble_shots(proj_dir: &Path, profile: &str) -> Result<Vec<Assemble
         .canonicalize()
         .unwrap_or_else(|_| proj_dir.to_path_buf());
     let mut shot_ids = Vec::new();
+    let mut timeline_durations = HashMap::new();
 
     let timeline_path = proj_dir.join("timeline.json");
     if timeline_path.is_file() {
         if let Ok(manifest) = TimelineManifest::load_from_file(&timeline_path) {
             for item in manifest.shots {
-                shot_ids.push(item.shot_id);
+                shot_ids.push(item.shot_id.clone());
+                timeline_durations.insert(item.shot_id, item.duration);
             }
         }
     }
@@ -136,11 +151,13 @@ fn collect_assemble_shots(proj_dir: &Path, profile: &str) -> Result<Vec<Assemble
 
         let render_video = fs::canonicalize(&render_video).unwrap_or(render_video);
         let orig_clip = fs::canonicalize(&orig_clip).unwrap_or(orig_clip);
+        let duration = timeline_durations.get(&shot_id).copied();
 
         assemble_shots.push(AssembleShot {
             shot_id,
             render_video,
             orig_clip,
+            duration,
         });
     }
 
@@ -221,10 +238,200 @@ fn escape_ffmpeg_path(path: &Path) -> String {
     s.replace('\\', "/").replace('\'', "'\\''")
 }
 
+fn probe_video_duration(path: &Path) -> Option<f64> {
+    if let Ok(output) = Command::new("ffprobe")
+        .args([
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "csv=p=0",
+        ])
+        .arg(path)
+        .output()
+    {
+        if output.status.success() {
+            let s = String::from_utf8_lossy(&output.stdout);
+            if let Ok(dur) = s.trim().parse::<f64>() {
+                return Some(dur);
+            }
+        }
+    }
+
+    if let Ok(output) = Command::new("ffprobe")
+        .args([
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=duration",
+            "-of",
+            "csv=p=0",
+        ])
+        .arg(path)
+        .output()
+    {
+        if output.status.success() {
+            let s = String::from_utf8_lossy(&output.stdout);
+            if let Ok(dur) = s.trim().parse::<f64>() {
+                return Some(dur);
+            }
+        }
+    }
+
+    None
+}
+
+fn probe_video_fps(path: &Path) -> Option<f64> {
+    let output = Command::new("ffprobe")
+        .args([
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=r_frame_rate",
+            "-of",
+            "csv=p=0",
+        ])
+        .arg(path)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let s = String::from_utf8_lossy(&output.stdout);
+    let trimmed = s.trim();
+    if let Some((num, den)) = trimmed.split_once('/') {
+        let n: f64 = num.parse().ok()?;
+        let d: f64 = den.parse().ok()?;
+        if d > 0.0 {
+            return Some(n / d);
+        }
+    }
+    trimmed.parse::<f64>().ok()
+}
+
+fn trim_video_clip(input_path: &Path, out_path: &Path, duration: f64) -> Result<()> {
+    if let Some(parent) = out_path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to create directory: {:?}", parent))?;
+    }
+
+    let file_stem = out_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("trimmed");
+    let temp_name = format!(".{}_{}.tmp.mp4", file_stem, std::process::id());
+    let temp_out = out_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join(temp_name);
+
+    let fps = probe_video_fps(input_path).unwrap_or(24.0);
+    let frames = (duration * fps).round().max(1.0);
+    let trim_dur = frames / fps;
+
+    let mut cmd = Command::new("ffmpeg");
+    cmd.args(["-nostdin", "-v", "error", "-y", "-i"])
+        .arg(input_path)
+        .args([
+            "-t",
+            &format!("{:.6}", trim_dur),
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "18",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
+            "-ar",
+            "32000",
+            "-ac",
+            "2",
+            "-f",
+            "mp4",
+        ])
+        .arg(&temp_out);
+
+    let output = cmd
+        .output()
+        .with_context(|| format!("Failed to run ffmpeg to trim {:?}", input_path))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let _ = fs::remove_file(&temp_out);
+        bail!("ffmpeg trim failed for {:?}: {}", input_path, stderr.trim());
+    }
+
+    if out_path.exists() {
+        fs::remove_file(out_path)?;
+    }
+    fs::rename(&temp_out, out_path)
+        .with_context(|| format!("Failed to rename {:?} to {:?}", temp_out, out_path))?;
+
+    Ok(())
+}
+
+fn prepare_effective_shots(shots: &[AssembleShot], output_dir: &Path) -> Result<Vec<AssembleShot>> {
+    let trim_dir = output_dir.join(".trim");
+    let mut effective_shots = Vec::with_capacity(shots.len());
+
+    for shot in shots {
+        let mut eff = shot.clone();
+
+        if let Some(target_dur) = shot.duration {
+            // 1. Render clip trimming if actual duration > target_dur + 0.08
+            if let Some(render_dur) = probe_video_duration(&shot.render_video) {
+                if render_dur > target_dur + 0.08 {
+                    let trim_render_path = trim_dir.join(format!("{}.mp4", shot.shot_id));
+                    let is_valid = trim_render_path.is_file()
+                        && fs::metadata(&trim_render_path)
+                            .map(|m| m.len() > 0)
+                            .unwrap_or(false);
+                    if !is_valid {
+                        trim_video_clip(&shot.render_video, &trim_render_path, target_dur)?;
+                    }
+                    eff.render_video = trim_render_path;
+                }
+            }
+
+            // 2. Original clip trimming (for compare movie and dual audio sync)
+            if shot.orig_clip.is_file() {
+                if let Some(orig_dur) = probe_video_duration(&shot.orig_clip) {
+                    if orig_dur > target_dur + 0.08 {
+                        let trim_orig_path = trim_dir.join(format!("{}_orig.mp4", shot.shot_id));
+                        let is_valid = trim_orig_path.is_file()
+                            && fs::metadata(&trim_orig_path)
+                                .map(|m| m.len() > 0)
+                                .unwrap_or(false);
+                        if !is_valid {
+                            trim_video_clip(&shot.orig_clip, &trim_orig_path, target_dur)?;
+                        }
+                        eff.orig_clip = trim_orig_path;
+                    }
+                }
+            }
+        }
+
+        effective_shots.push(eff);
+    }
+
+    Ok(effective_shots)
+}
+
 fn assemble_final_movie(shots: &[AssembleShot], final_path: &Path, work_dir: &Path) -> Result<()> {
     let work_dir = work_dir
         .canonicalize()
         .unwrap_or_else(|_| work_dir.to_path_buf());
+    let effective_shots = prepare_effective_shots(shots, &work_dir)?;
+    let shots = &effective_shots;
+
     let h3_list_path = work_dir.join(format!(".h3_concat_{}.txt", std::process::id()));
     let orig_list_path = work_dir.join(format!(".orig_concat_{}.txt", std::process::id()));
     let temp_final_path = work_dir.join(format!(".temp_final_{}.mp4", std::process::id()));
@@ -343,6 +550,9 @@ fn assemble_compare_movie(
     let work_dir = work_dir
         .canonicalize()
         .unwrap_or_else(|_| work_dir.to_path_buf());
+    let effective_shots = prepare_effective_shots(shots, &work_dir)?;
+    let shots = &effective_shots;
+
     let pid = std::process::id();
     let temp_compare_dir = work_dir.join(format!(".tmp_compare_{}", pid));
     fs::create_dir_all(&temp_compare_dir)?;
@@ -563,5 +773,182 @@ mod tests {
         let p = Path::new("/path/with 'quotes'/and space");
         let esc = escape_ffmpeg_path(p);
         assert_eq!(esc, "/path/with '\\''quotes'\\''/and space");
+    }
+
+    fn create_test_video(path: &Path, duration_sec: f64) -> bool {
+        let output = Command::new("ffmpeg")
+            .args([
+                "-nostdin",
+                "-v",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                &format!("color=c=blue:s=160x120:d={:.3}", duration_sec),
+                "-c:v",
+                "libx264",
+                "-preset",
+                "ultrafast",
+                "-pix_fmt",
+                "yuv420p",
+            ])
+            .arg(path)
+            .output();
+        output.map(|o| o.status.success()).unwrap_or(false)
+    }
+
+    #[test]
+    fn test_probe_video_duration_and_trim_video_clip() {
+        let tmp_dir = tempfile::tempdir().expect("create temp dir");
+        let raw_video = tmp_dir.path().join("raw.mp4");
+        if !create_test_video(&raw_video, 3.0) {
+            eprintln!("Skipping test: ffmpeg lavfi not available");
+            return;
+        }
+
+        let dur = probe_video_duration(&raw_video).expect("probe duration of raw video");
+        assert!(
+            (dur - 3.0).abs() < 0.2,
+            "Raw duration should be ~3.0s, got {}",
+            dur
+        );
+
+        let trimmed_video = tmp_dir.path().join("trimmed.mp4");
+        trim_video_clip(&raw_video, &trimmed_video, 1.5).expect("trim video clip");
+        assert!(trimmed_video.is_file());
+
+        let trimmed_dur =
+            probe_video_duration(&trimmed_video).expect("probe duration of trimmed video");
+        assert!(
+            (trimmed_dur - 1.5).abs() < 0.2,
+            "Trimmed duration should be ~1.5s, got {}",
+            trimmed_dur
+        );
+    }
+
+    #[test]
+    fn test_prepare_effective_shots_trim_threshold_and_reuse() {
+        let tmp_dir = tempfile::tempdir().expect("create temp dir");
+        let work_dir = tmp_dir.path().join("outputs").join("smoke");
+        fs::create_dir_all(&work_dir).unwrap();
+
+        let v3_path = tmp_dir.path().join("video_3s.mp4");
+        let v1_path = tmp_dir.path().join("video_1s.mp4");
+        if !create_test_video(&v3_path, 3.0) || !create_test_video(&v1_path, 1.0) {
+            eprintln!("Skipping test: ffmpeg lavfi not available");
+            return;
+        }
+
+        let shots = vec![
+            // Case 1: Needs trim (actual 3.0s > target 1.5s + 0.08)
+            AssembleShot {
+                shot_id: "shot_0001".to_string(),
+                render_video: v3_path.clone(),
+                orig_clip: v3_path.clone(),
+                duration: Some(1.5),
+            },
+            // Case 2: No trim needed (actual 3.0s <= target 3.0s + 0.08)
+            AssembleShot {
+                shot_id: "shot_0002".to_string(),
+                render_video: v3_path.clone(),
+                orig_clip: v3_path.clone(),
+                duration: Some(3.0),
+            },
+            // Case 3: No duration in timeline -> no trim
+            AssembleShot {
+                shot_id: "shot_0003".to_string(),
+                render_video: v3_path.clone(),
+                orig_clip: v3_path.clone(),
+                duration: None,
+            },
+            // Case 4: No orig clip file exists -> only render video trimmed
+            AssembleShot {
+                shot_id: "shot_0004".to_string(),
+                render_video: v3_path.clone(),
+                orig_clip: tmp_dir.path().join("non_existent.mp4"),
+                duration: Some(1.0),
+            },
+        ];
+
+        let eff = prepare_effective_shots(&shots, &work_dir).expect("prepare effective shots");
+        assert_eq!(eff.len(), 4);
+
+        // Shot 1 should be trimmed to .trim/shot_0001.mp4 and .trim/shot_0001_orig.mp4
+        assert_eq!(
+            eff[0].render_video,
+            work_dir.join(".trim").join("shot_0001.mp4")
+        );
+        assert_eq!(
+            eff[0].orig_clip,
+            work_dir.join(".trim").join("shot_0001_orig.mp4")
+        );
+        assert!(eff[0].render_video.is_file());
+        assert!(eff[0].orig_clip.is_file());
+        let dur_trimmed = probe_video_duration(&eff[0].render_video).unwrap();
+        assert!((dur_trimmed - 1.5).abs() < 0.2);
+
+        // Shot 2 should keep original files
+        assert_eq!(eff[1].render_video, v3_path);
+        assert_eq!(eff[1].orig_clip, v3_path);
+
+        // Shot 3 should keep original files
+        assert_eq!(eff[2].render_video, v3_path);
+        assert_eq!(eff[2].orig_clip, v3_path);
+
+        // Shot 4: render trimmed, orig_clip kept as nonexistent path
+        assert_eq!(
+            eff[3].render_video,
+            work_dir.join(".trim").join("shot_0004.mp4")
+        );
+        assert_eq!(eff[3].orig_clip, tmp_dir.path().join("non_existent.mp4"));
+
+        // Reuse test: calling again should reuse existing files without error
+        let eff2 =
+            prepare_effective_shots(&shots, &work_dir).expect("prepare effective shots reuse");
+        assert_eq!(eff2[0].render_video, eff[0].render_video);
+    }
+
+    #[test]
+    fn test_collect_assemble_shots_reads_timeline_duration() {
+        let tmp_dir = tempfile::tempdir().expect("create temp dir");
+        let proj_dir = tmp_dir.path();
+        let shot_render_dir = proj_dir
+            .join("shots")
+            .join("shot_0001")
+            .join("renders")
+            .join("smoke");
+        fs::create_dir_all(&shot_render_dir).unwrap();
+        let shot_file = shot_render_dir.join("shot_0001.mp4");
+        fs::write(&shot_file, b"dummy video content").unwrap();
+
+        // 1. With timeline.json
+        let timeline_json = r#"{
+            "shots": [
+                {
+                    "shot_id": "shot_0001",
+                    "start_sec": 0.0,
+                    "end_sec": 2.45,
+                    "duration": 2.45,
+                    "is_chained_longtake": false,
+                    "anchor": "first_and_last",
+                    "assignee": ""
+                }
+            ]
+        }"#;
+        fs::write(proj_dir.join("timeline.json"), timeline_json).unwrap();
+
+        let shots = collect_assemble_shots(proj_dir, "smoke").expect("collect assemble shots");
+        assert_eq!(shots.len(), 1);
+        assert_eq!(shots[0].shot_id, "shot_0001");
+        assert_eq!(shots[0].duration, Some(2.45));
+
+        // 2. Without timeline.json -> duration should be None
+        fs::remove_file(proj_dir.join("timeline.json")).unwrap();
+        let shots_no_tl =
+            collect_assemble_shots(proj_dir, "smoke").expect("collect without timeline");
+        assert_eq!(shots_no_tl.len(), 1);
+        assert_eq!(shots_no_tl[0].shot_id, "shot_0001");
+        assert_eq!(shots_no_tl[0].duration, None);
     }
 }

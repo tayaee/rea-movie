@@ -1,8 +1,7 @@
 use anyhow::{Context, Result};
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
 
-static MINIMAX_API_DISABLED: AtomicBool = AtomicBool::new(false);
+// Section 3.9: Process-wide static disable removed; API failure is handled per-shot with warning log.
 
 #[allow(dead_code)]
 pub struct PromptGenContext<'a> {
@@ -23,57 +22,102 @@ pub struct PromptGenContext<'a> {
     pub custom_mod: Option<&'a str>,
 }
 
-pub fn generate_prompts(ctx: &PromptGenContext, ko_path: &Path, h3_path: &Path) -> Result<()> {
-    let need_ko = ctx.force || !ko_path.exists();
-    let need_h3 = ctx.force || !h3_path.exists();
-
-    if !need_ko && !need_h3 {
-        return Ok(());
-    }
-
-    let mut generated_ko = None;
-    let mut generated_h3 = None;
-
-    let api_key = std::env::var("MINIMAX_API_KEY").ok();
-    if !ctx.offline
-        && !MINIMAX_API_DISABLED.load(Ordering::Relaxed)
-        && api_key
-            .as_deref()
-            .map(|k| !k.trim().is_empty())
-            .unwrap_or(false)
-        && ctx.contact_sheet_path.exists()
-    {
-        match try_minimax_m3_api(ctx, api_key.as_deref().unwrap().trim()) {
-            Ok((ko, h3)) => {
-                generated_ko = Some(ko);
-                generated_h3 = Some(h3);
+// Section 3.2 & Section 3.3: Base preservation and idempotent block injection
+pub fn generate_prompts(
+    ctx: &PromptGenContext,
+    blocks: &[crate::customize::Block],
+    ko_path: &Path,
+    h3_path: &Path,
+) -> Result<()> {
+    // Section 3.3: Base preservation
+    // decompile preserves existing base even with --force (only customization blocks are updated)
+    let existing_base_ko = if ko_path.is_file() {
+        if let Ok(content) = std::fs::read_to_string(ko_path) {
+            let base = crate::customize::extract_base(&content);
+            if !base.is_empty() {
+                Some(base)
+            } else {
+                None
             }
-            Err(_) => {
-                MINIMAX_API_DISABLED.store(true, Ordering::Relaxed);
-            }
+        } else {
+            None
         }
-    }
-
-    let (ko_content, h3_content) = match (generated_ko, generated_h3) {
-        (Some(ko), Some(h3)) => (ko, h3),
-        _ => generate_deterministic_template(ctx),
+    } else {
+        None
     };
 
-    if need_ko {
-        if let Some(parent) = ko_path.parent() {
-            std::fs::create_dir_all(parent)?;
+    let existing_base_h3 = if h3_path.is_file() {
+        if let Ok(content) = std::fs::read_to_string(h3_path) {
+            let base = crate::customize::extract_base(&content);
+            if !base.is_empty() {
+                Some(base)
+            } else {
+                None
+            }
+        } else {
+            None
         }
-        std::fs::write(ko_path, ko_content)
-            .with_context(|| format!("Failed to write prompt.ko.md to {:?}", ko_path))?;
-    }
+    } else {
+        None
+    };
 
-    if need_h3 {
-        if let Some(parent) = h3_path.parent() {
-            std::fs::create_dir_all(parent)?;
+    // If both bases exist, preserve them without calling M3 API.
+    // Otherwise, generate base using M3 API (or fallback template).
+    let (base_ko, base_h3) = match (existing_base_ko, existing_base_h3) {
+        (Some(ko), Some(h3)) => (ko, h3),
+        (opt_ko, opt_h3) => {
+            let mut generated_ko = None;
+            let mut generated_h3 = None;
+
+            let api_key = std::env::var("MINIMAX_API_KEY").ok();
+            if !ctx.offline
+                && api_key
+                    .as_deref()
+                    .map(|k| !k.trim().is_empty())
+                    .unwrap_or(false)
+                && ctx.contact_sheet_path.exists()
+            {
+                match try_minimax_m3_api(ctx, api_key.as_deref().unwrap().trim()) {
+                    Ok((ko, h3)) => {
+                        generated_ko = Some(ko);
+                        generated_h3 = Some(h3);
+                    }
+                    Err(e) => {
+                        // Section 3.9: M3 API failure is logged and falls back per-shot without disabling process-wide
+                        eprintln!(
+                            "Warning: MiniMax-M3 API failed for shot {}: {:#}; falling back to deterministic template",
+                            ctx.shot_id, e
+                        );
+                    }
+                }
+            }
+
+            let (tmpl_ko, tmpl_h3) = match (generated_ko, generated_h3) {
+                (Some(ko), Some(h3)) => (ko, h3),
+                _ => generate_deterministic_template(ctx),
+            };
+
+            let final_base_ko = opt_ko.unwrap_or_else(|| crate::customize::extract_base(&tmpl_ko));
+            let final_base_h3 = opt_h3.unwrap_or_else(|| crate::customize::extract_base(&tmpl_h3));
+            (final_base_ko, final_base_h3)
         }
-        std::fs::write(h3_path, h3_content)
-            .with_context(|| format!("Failed to write prompt.h3.txt to {:?}", h3_path))?;
+    };
+
+    // Section 3.2: Apply customization blocks to bases
+    let final_ko = crate::customize::apply_to_ko(&base_ko, blocks);
+    let final_h3 = crate::customize::apply_to_h3(&base_h3, blocks);
+
+    if let Some(parent) = ko_path.parent() {
+        std::fs::create_dir_all(parent)?;
     }
+    std::fs::write(ko_path, final_ko)
+        .with_context(|| format!("Failed to write prompt.ko.md to {:?}", ko_path))?;
+
+    if let Some(parent) = h3_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(h3_path, final_h3)
+        .with_context(|| format!("Failed to write prompt.h3.txt to {:?}", h3_path))?;
 
     Ok(())
 }
@@ -283,7 +327,7 @@ fn try_minimax_m3_api(ctx: &PromptGenContext, api_key: &str) -> Result<(String, 
     let data_uri = format!("data:image/jpeg;base64,{}", base64_img);
 
     let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
+        .timeout(std::time::Duration::from_secs(180))
         .build()?;
 
     let (ko_dlg, h3_dlg) = build_dialogue_lines(ctx);
@@ -332,28 +376,238 @@ fn try_minimax_m3_api(ctx: &PromptGenContext, api_key: &str) -> Result<(String, 
         .as_str()
         .context("Missing content in MiniMax M3 response")?;
 
-    let cleaned = text
-        .trim()
-        .trim_start_matches("```json")
-        .trim_start_matches("```")
-        .trim_end_matches("```")
-        .trim();
-    let json_slice = match (cleaned.find('{'), cleaned.rfind('}')) {
-        (Some(s), Some(e)) if e > s => &cleaned[s..=e],
-        _ => cleaned,
-    };
-
-    let parsed: serde_json::Value = serde_json::from_str(json_slice)?;
-    let ko = parsed["prompt_ko"]
-        .as_str()
-        .context("Missing prompt_ko")?
-        .to_string();
-    let h3 = parsed["prompt_h3"]
-        .as_str()
-        .context("Missing prompt_h3")?
-        .to_string();
+    let parsed: serde_json::Value = parse_llm_json(text)?;
+    let ko =
+        json_field_to_text(&parsed["prompt_ko"], &["prompt_ko"]).context("Missing prompt_ko")?;
+    let h3 = json_field_to_text(
+        &parsed["prompt_h3"],
+        &[
+            "integrated_multimodal_description",
+            "overall_soundscape",
+            "non_diegetic_music",
+        ],
+    )
+    .context("Missing prompt_h3")?;
 
     Ok((ko, h3))
+}
+
+/// Convert a JSON field into prompt text.
+///
+/// MiniMax-M3 returns `prompt_h3` either as a plain string or as an object with
+/// the H3 schema keys. Both shapes have to be accepted, otherwise every shot
+/// silently degrades to the deterministic template.
+fn json_field_to_text(value: &serde_json::Value, schema_keys: &[&str]) -> Option<String> {
+    match value {
+        serde_json::Value::String(text) => Some(text.clone()),
+        serde_json::Value::Object(map) => {
+            let mut parts: Vec<String> = Vec::new();
+            for key in schema_keys {
+                if let Some(serde_json::Value::String(text)) = map.get(*key) {
+                    parts.push(format!("{}: {}", key, text.trim()));
+                }
+            }
+            if parts.is_empty() {
+                // Unknown object shape: flatten every string value.
+                for (key, val) in map {
+                    if let serde_json::Value::String(text) = val {
+                        parts.push(format!("{}: {}", key, text.trim()));
+                    }
+                }
+            }
+            if parts.is_empty() {
+                None
+            } else {
+                Some(parts.join("\n"))
+            }
+        }
+        _ => None,
+    }
+}
+
+// Section 3.4: Character detection via MiniMax-M3 Vision API
+pub fn detect_characters_with_m3(
+    contact_sheet_path: &Path,
+    bible: &std::collections::BTreeMap<String, crate::customize::Character>,
+    api_key: &str,
+) -> Result<Vec<String>> {
+    let img_bytes = std::fs::read(contact_sheet_path)?;
+    let base64_img = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &img_bytes);
+    let data_uri = format!("data:image/jpeg;base64,{}", base64_img);
+
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(180))
+        .build()?;
+
+    let mut bible_entries = Vec::new();
+    for (id, ch) in bible {
+        bible_entries.push(format!(
+            "ID: '{}', Appearance: '{}', Wardrobe: '{}'",
+            id, ch.appearance_en, ch.wardrobe_en
+        ));
+    }
+    let bible_text = bible_entries.join("\n");
+
+    let system_prompt = "You are a film casting director and vision analyzer. Given a character Bible with visual descriptions and a contact sheet image containing sequential frames of a movie shot, identify which characters appear in the shot. Respond ONLY with valid JSON in the format {\"characters\": [\"id1\", \"id2\"]}. Only include IDs present in the provided Bible. If no character from the Bible appears, return {\"characters\": []}.";
+
+    let user_msg = serde_json::json!({
+        "model": "MiniMax-M3",
+        "messages": [
+            {
+                "role": "system",
+                "content": system_prompt
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": format!("Character Bible:\n{}\n\nWhich of these characters appear in the contact sheet?", bible_text)
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": data_uri
+                        }
+                    }
+                ]
+            }
+        ]
+    });
+
+    let resp = client
+        .post("https://api.minimax.io/v1/chat/completions")
+        .header("Authorization", format!("Bearer {}", api_key))
+        .json(&user_msg)
+        .send()?;
+
+    if !resp.status().is_success() {
+        anyhow::bail!(
+            "MiniMax character detection API returned status: {}",
+            resp.status()
+        );
+    }
+
+    let json_val: serde_json::Value = resp.json()?;
+    let text = json_val["choices"][0]["message"]["content"]
+        .as_str()
+        .context("Missing content in MiniMax character detection response")?;
+
+    let parsed: serde_json::Value = parse_llm_json(text)?;
+    let mut detected = Vec::new();
+    if let Some(arr) = parsed["characters"].as_array() {
+        for item in arr {
+            if let Some(id) = item.as_str() {
+                if bible.contains_key(id) && !detected.contains(&id.to_string()) {
+                    detected.push(id.to_string());
+                }
+            }
+        }
+    }
+
+    Ok(detected)
+}
+
+// Section 3.7: Translate --mod directive into English statement via MiniMax-M3 API
+pub fn translate_mod_to_english_m3(mod_ko: &str, api_key: &str) -> Result<String> {
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(180))
+        .build()?;
+
+    let system_prompt = "You are a film visual director and prompt engineer. Translate the given visual direction or trait into concise, cinematic English for a video generation prompt. Output only the translated English sentence, no markdown, no quotes.";
+
+    let user_msg = serde_json::json!({
+        "model": "MiniMax-M3",
+        "messages": [
+            {
+                "role": "system",
+                "content": system_prompt
+            },
+            {
+                "role": "user",
+                "content": mod_ko
+            }
+        ]
+    });
+
+    let resp = client
+        .post("https://api.minimax.io/v1/chat/completions")
+        .header("Authorization", format!("Bearer {}", api_key))
+        .json(&user_msg)
+        .send()?;
+
+    if !resp.status().is_success() {
+        anyhow::bail!("MiniMax translation API returned status: {}", resp.status());
+    }
+
+    let json_val: serde_json::Value = resp.json()?;
+    let text = json_val["choices"][0]["message"]["content"]
+        .as_str()
+        .context("Missing content in MiniMax translation response")?;
+
+    let cleaned = strip_think_blocks(text);
+    Ok(cleaned.trim().to_string())
+}
+
+// Section 3.6: Recompile Korean director prompt base to English H3 prompt via MiniMax-M3 API
+pub fn translate_ko_base_to_h3_m3(
+    ko_base: &str,
+    shot_meta: &crate::timeline::ShotMeta,
+    api_key: &str,
+) -> Result<String> {
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(180))
+        .build()?;
+
+    let system_prompt = "You are a professional film reverse-engineering director and prompt engineer for MiniMax-H3 video generation. Translate and recompile the provided Korean director notes (prompt.ko.md base) into a structured English MiniMax-H3 prompt. The prompt must strictly adhere to the MiniMax-H3 schema with 'integrated_multimodal_description:', 'overall_soundscape:', and 'non_diegetic_music:'. Output valid JSON with a single key 'prompt_h3'. Preserve any <d>[Language] ...</d> dialogue tags exactly as provided in the input text without translation.";
+
+    let user_msg = serde_json::json!({
+        "model": "MiniMax-M3",
+        "messages": [
+            {
+                "role": "system",
+                "content": system_prompt
+            },
+            {
+                "role": "user",
+                "content": format!(
+                    "Recompile the following Korean director notes for shot '{}' (duration {:.2}s, anchor '{}') into an English MiniMax-H3 prompt:\n\n{}",
+                    shot_meta.shot_id, shot_meta.duration, shot_meta.anchor, ko_base
+                )
+            }
+        ]
+    });
+
+    let resp = client
+        .post("https://api.minimax.io/v1/chat/completions")
+        .header("Authorization", format!("Bearer {}", api_key))
+        .json(&user_msg)
+        .send()?;
+
+    if !resp.status().is_success() {
+        anyhow::bail!(
+            "MiniMax prompt compile API returned status: {}",
+            resp.status()
+        );
+    }
+
+    let json_val: serde_json::Value = resp.json()?;
+    let text = json_val["choices"][0]["message"]["content"]
+        .as_str()
+        .context("Missing content in MiniMax prompt compile response")?;
+
+    let parsed: serde_json::Value = parse_llm_json(text)?;
+    let h3 = json_field_to_text(
+        &parsed["prompt_h3"],
+        &[
+            "integrated_multimodal_description",
+            "overall_soundscape",
+            "non_diegetic_music",
+        ],
+    )
+    .context("Missing prompt_h3 in response")?;
+
+    Ok(h3)
 }
 
 fn generate_deterministic_template(ctx: &PromptGenContext) -> (String, String) {
@@ -365,26 +619,10 @@ fn generate_deterministic_template(ctx: &PromptGenContext) -> (String, String) {
         format!("{:.1}s", ctx.audio_peaks[0])
     };
     let (ko_dlg, h3_dlg) = build_dialogue_lines(ctx);
-    let (ko_mod, h3_mod) = match ctx.custom_mod {
-        Some(m) if !m.trim().is_empty() => {
-            let trimmed = m.trim();
-            if trimmed.to_ascii_lowercase().contains("kbo") || trimmed.contains("야구모자") {
-                (
-                    format!(
-                        "\n- 커스텀 연출(재생성 식별 마커): {} — 주인공은 머리에 'KBO' 로고가 선명하게 자수된 네이비/레드 배색의 한국 프로야구(KBO) 야구모자를 착용하고 있다.",
-                        trimmed
-                    ),
-                    " IMPORTANT VISUAL MODIFICATION: The main protagonist prominently wears a navy-and-red KBO (Korean Baseball Organization) baseball cap with a bold white embroidered 'KBO' emblem on his head throughout the entire shot.".to_string(),
-                )
-            } else {
-                (
-                    format!("\n- 커스텀 연출: {}", trimmed),
-                    format!(" IMPORTANT VISUAL MODIFICATION: {}.", trimmed),
-                )
-            }
-        }
-        _ => (String::new(), String::new()),
-    };
+    // Section 3.7: Removed hardcoded "kbo"/"야구모자" branching.
+    // Visual modifications and traits are injected via customization blocks.
+    let ko_mod = "";
+    let h3_mod = "";
 
     let ko = format!(
         r#"# 샷 연출 지시서: {} ({:.2}s ~ {:.2}s)
@@ -436,4 +674,198 @@ Subtle, restrained cinematic underscore maintaining dramatic tension without ove
     );
 
     (ko, h3)
+}
+
+/// Strip all `<think>...</think>` reasoning blocks (case-insensitive, across lines) from LLM responses.
+pub fn strip_think_blocks(text: &str) -> String {
+    let lower = text.to_ascii_lowercase();
+    let mut result = String::with_capacity(text.len());
+    let mut last_idx = 0;
+
+    while let Some(start_rel) = lower[last_idx..].find("<think>") {
+        let start_pos = last_idx + start_rel;
+        result.push_str(&text[last_idx..start_pos]);
+        let after_start = start_pos + "<think>".len();
+        if let Some(end_rel) = lower[after_start..].find("</think>") {
+            last_idx = after_start + end_rel + "</think>".len();
+        } else {
+            // Unclosed <think> tag: treat remainder as thinking block
+            last_idx = text.len();
+            break;
+        }
+    }
+    result.push_str(&text[last_idx..]);
+    result
+}
+
+/// Extract clean JSON slice from LLM response text (strips markdown code fences and extracts outermost object or array).
+pub fn extract_json_slice(text: &str) -> &str {
+    let trimmed = text.trim();
+    let without_fences = if trimmed.starts_with("```") {
+        let without_prefix = if let Some(stripped) = trimmed.strip_prefix("```json") {
+            stripped
+        } else if let Some(stripped) = trimmed.strip_prefix("```JSON") {
+            stripped
+        } else if let Some(stripped) = trimmed.strip_prefix("```") {
+            stripped
+        } else {
+            trimmed
+        };
+        without_prefix.trim_end_matches('`').trim()
+    } else {
+        trimmed
+    };
+
+    // Find outermost { ... }
+    let obj_start = without_fences.find('{');
+    let obj_end = without_fences.rfind('}');
+    // Find outermost [ ... ]
+    let arr_start = without_fences.find('[');
+    let arr_end = without_fences.rfind(']');
+
+    match (obj_start, obj_end, arr_start, arr_end) {
+        (Some(os), Some(oe), Some(as_), Some(ae)) if oe > os && ae > as_ => {
+            if os <= as_ && oe >= ae {
+                &without_fences[os..=oe]
+            } else if as_ <= os && ae >= oe {
+                &without_fences[as_..=ae]
+            } else if os < as_ {
+                &without_fences[os..=oe]
+            } else {
+                &without_fences[as_..=ae]
+            }
+        }
+        (Some(os), Some(oe), _, _) if oe > os => &without_fences[os..=oe],
+        (_, _, Some(as_), Some(ae)) if ae > as_ => &without_fences[as_..=ae],
+        _ => without_fences,
+    }
+}
+
+/// Common parser for MiniMax-M3 LLM responses:
+/// 1. Strips `<think>...</think>` reasoning blocks
+/// 2. Strips markdown fences (```json ... ```)
+/// 3. Extracts and parses outermost JSON object or array
+/// 4. Sanitizes raw control characters emitted inside JSON strings
+pub fn parse_llm_json<T: serde::de::DeserializeOwned>(text: &str) -> Result<T> {
+    let stripped = strip_think_blocks(text);
+    let json_str = extract_json_slice(&stripped);
+    let sanitized = sanitize_json_control_chars(json_str);
+    serde_json::from_str(&sanitized)
+        .with_context(|| format!("Failed to parse JSON from LLM response:\n{}", text))
+}
+
+/// Escape raw control characters that appear inside JSON string literals.
+///
+/// MiniMax-M3 sometimes emits a multi-line prompt value with literal line
+/// breaks, which is invalid JSON ("control character found while parsing a
+/// string"). Newlines and tabs are re-escaped so the prompt keeps its shape;
+/// any other control byte is dropped.
+pub fn sanitize_json_control_chars(json: &str) -> String {
+    let mut out = String::with_capacity(json.len());
+    let mut in_string = false;
+    let mut escaped = false;
+
+    for ch in json.chars() {
+        if in_string {
+            if escaped {
+                escaped = false;
+                out.push(ch);
+                continue;
+            }
+            match ch {
+                '\\' => {
+                    escaped = true;
+                    out.push(ch);
+                }
+                '"' => {
+                    in_string = false;
+                    out.push(ch);
+                }
+                '\n' => out.push_str("\\n"),
+                '\r' => out.push_str("\\r"),
+                '\t' => out.push_str("\\t"),
+                c if (c as u32) < 0x20 => {}
+                c => out.push(c),
+            }
+            continue;
+        }
+
+        if ch == '"' {
+            in_string = true;
+        }
+        out.push(ch);
+    }
+
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::Value;
+
+    #[test]
+    fn test_strip_think_blocks() {
+        let input = "<think>\nThinking about life...\n{\n  \"ignore\": 1\n}\n</think>{\"head\": {\"x\": 0.1}}";
+        assert_eq!(strip_think_blocks(input), "{\"head\": {\"x\": 0.1}}");
+
+        let case_insensitive = "<THINK>Thinking...</THINK>{\"ok\": true}";
+        assert_eq!(strip_think_blocks(case_insensitive), "{\"ok\": true}");
+
+        let multiple_blocks = "<think>first</think>part1<think>second</think>part2";
+        assert_eq!(strip_think_blocks(multiple_blocks), "part1part2");
+
+        let unclosed = "<think>unfinished thinking";
+        assert_eq!(strip_think_blocks(unclosed), "");
+
+        let no_think = "{\"hello\": \"world\"}";
+        assert_eq!(strip_think_blocks(no_think), "{\"hello\": \"world\"}");
+    }
+
+    #[test]
+    fn test_extract_json_slice() {
+        let wrapped_json = "```json\n{\"foo\": \"bar\"}\n```";
+        assert_eq!(extract_json_slice(wrapped_json), "{\"foo\": \"bar\"}");
+
+        let with_text = "Here is the result:\n```json\n{\"x\": 1}\n```\nHope it helps!";
+        assert_eq!(extract_json_slice(with_text), "{\"x\": 1}");
+
+        let array_json = "Prefix [1, 2, 3] Suffix";
+        assert_eq!(extract_json_slice(array_json), "[1, 2, 3]");
+    }
+
+    #[test]
+    fn test_parse_llm_json_with_think_and_markdown() {
+        let raw = r#"
+<think>
+I need to locate the head.
+The character is Walter White.
+Let's emit JSON:
+{"ignore_this_head": null}
+</think>
+```json
+{
+  "head": {
+    "x": 0.263,
+    "y": 0.079,
+    "w": 0.206,
+    "h": 0.519
+  }
+}
+```
+"#;
+        let val: Value = parse_llm_json(raw).expect("parse_llm_json should succeed");
+        assert_eq!(val["head"]["x"].as_f64().unwrap(), 0.263);
+        assert_eq!(val["head"]["y"].as_f64().unwrap(), 0.079);
+        assert_eq!(val["head"]["w"].as_f64().unwrap(), 0.206);
+        assert_eq!(val["head"]["h"].as_f64().unwrap(), 0.519);
+    }
+
+    #[test]
+    fn test_sanitize_json_control_chars() {
+        let raw = "{\"a\": \"line1\nline2\"}";
+        let fixed = sanitize_json_control_chars(raw);
+        let parsed: serde_json::Value = serde_json::from_str(&fixed).expect("should parse");
+        assert_eq!(parsed["a"], "line1\nline2");
+    }
 }

@@ -118,26 +118,50 @@ pub fn run_decompile(opts: DecompileOptions) -> Result<PathBuf> {
     let spans = build_shot_spans(&input_str, opts.range, max_dur)?;
     println!("==> Total shots identified: {}", spans.len());
 
-    // 4. timeline.json
+    // 4. timeline.json setup & customization loading
     let timeline_path = proj_dir.join("timeline.json");
     let mut timeline_items = Vec::new();
 
-    for span in &spans {
-        timeline_items.push(TimelineShotItem {
-            shot_id: span.shot_id.clone(),
-            start_sec: span.start_sec,
-            end_sec: span.end_sec,
-            duration: span.duration,
-            is_chained_longtake: span.is_chained_longtake,
-            anchor: "first_and_last".to_string(),
-            assignee: "".to_string(),
-        });
-    }
+    // Section 3.1 & Section 3.7: Load customization and integrate --mod as global trait
+    let mut custom = crate::customize::Customization::load(&proj_dir);
+    let api_key = std::env::var("MINIMAX_API_KEY").ok();
+    let has_api_key = api_key
+        .as_deref()
+        .map(|k| !k.trim().is_empty())
+        .unwrap_or(false);
 
-    let manifest = TimelineManifest {
-        shots: timeline_items,
-    };
-    manifest.save_to_file(&timeline_path)?;
+    if let Some(m) = opts.custom_mod {
+        if !m.trim().is_empty() {
+            let stmt_en = if !opts.offline && has_api_key {
+                match prompt::translate_mod_to_english_m3(
+                    m.trim(),
+                    api_key.as_deref().unwrap().trim(),
+                ) {
+                    Ok(en) => en,
+                    Err(e) => {
+                        eprintln!(
+                            "Warning: Failed to translate --mod via M3 API: {:#}; using raw text",
+                            e
+                        );
+                        m.trim().to_string()
+                    }
+                }
+            } else {
+                m.trim().to_string()
+            };
+
+            custom.traits.push(crate::customize::Trait {
+                id: "custom_mod".to_string(),
+                scope: "global".to_string(),
+                target: "scene".to_string(),
+                shots: vec![],
+                statement_en: stmt_en,
+                statement_ko: m.trim().to_string(),
+                negative_en: None,
+                negative_ko: None,
+            });
+        }
+    }
 
     // 5. Process each shot
     let shots_dir = proj_dir.join("shots");
@@ -188,19 +212,52 @@ pub fn run_decompile(opts: DecompileOptions) -> Result<PathBuf> {
         // Analyze audio peaks
         let peaks = audio::analyze_audio_peaks(&original_audio, span.duration).unwrap_or_default();
 
+        // Section 3.4: Character detection via MiniMax-M3 Vision API
+        let detected = if !opts.offline
+            && has_api_key
+            && !custom.characters.is_empty()
+            && contact_sheet.exists()
+        {
+            match prompt::detect_characters_with_m3(
+                &contact_sheet,
+                &custom.characters,
+                api_key.as_deref().unwrap().trim(),
+            ) {
+                Ok(chars) if !chars.is_empty() => chars,
+                Ok(_) => vec!["S1".to_string()],
+                Err(e) => {
+                    eprintln!(
+                        "Warning: Character detection failed for {}: {:#}; falling back to ['S1']",
+                        span.shot_id, e
+                    );
+                    vec!["S1".to_string()]
+                }
+            }
+        } else {
+            vec!["S1".to_string()]
+        };
+
+        // Section 3.4: customization/shots/<shot_id>.toml cast takes precedence
+        let final_cast = custom.cast_for(&span.shot_id, &detected);
+
         // shot.toml
         let shot_toml_path = shot_dir.join("shot.toml");
         let shot_meta = if shot_toml_path.exists() && !opts.force {
-            ShotMeta::load_from_file(&shot_toml_path).unwrap_or_else(|_| ShotMeta {
+            let mut meta = ShotMeta::load_from_file(&shot_toml_path).unwrap_or_else(|_| ShotMeta {
                 shot_id: span.shot_id.clone(),
                 start_time: span.start_sec,
                 end_time: span.end_sec,
                 duration: span.duration,
                 anchor: "first_and_last".to_string(),
                 seed: 42,
-                characters: vec!["S1".to_string()],
+                characters: final_cast.clone(),
                 audio_peaks: peaks.clone(),
-            })
+            });
+            if meta.characters.is_empty() {
+                meta.characters = final_cast.clone();
+                let _ = meta.save_to_file(&shot_toml_path);
+            }
+            meta
         } else {
             let meta = ShotMeta {
                 shot_id: span.shot_id.clone(),
@@ -209,12 +266,24 @@ pub fn run_decompile(opts: DecompileOptions) -> Result<PathBuf> {
                 duration: span.duration,
                 anchor: "first_and_last".to_string(),
                 seed: 42 + span.index as u64,
-                characters: vec!["S1".to_string()],
+                characters: final_cast.clone(),
                 audio_peaks: peaks.clone(),
             };
             meta.save_to_file(&shot_toml_path)?;
             meta
         };
+
+        // Section 3.4: Record character cast in timeline item
+        timeline_items.push(TimelineShotItem {
+            shot_id: span.shot_id.clone(),
+            start_sec: span.start_sec,
+            end_sec: span.end_sec,
+            duration: span.duration,
+            is_chained_longtake: span.is_chained_longtake,
+            anchor: shot_meta.anchor.clone(),
+            assignee: "".to_string(),
+            characters: shot_meta.characters.clone(),
+        });
 
         // Prompts
         let ko_path = shot_dir.join("prompt.ko.md");
@@ -243,8 +312,16 @@ pub fn run_decompile(opts: DecompileOptions) -> Result<PathBuf> {
             custom_mod: opts.custom_mod,
         };
 
-        generate_prompts(&prompt_ctx, &ko_path, &h3_path)?;
+        // Section 3.2 & Section 3.5: Resolve blocks and inject into prompts
+        let blocks = custom.blocks_for(&span.shot_id, &shot_meta.characters);
+        generate_prompts(&prompt_ctx, &blocks, &ko_path, &h3_path)?;
     }
+
+    // Section 3.4: Save final timeline manifest with resolved character casts
+    let manifest = TimelineManifest {
+        shots: timeline_items,
+    };
+    manifest.save_to_file(&timeline_path)?;
 
     // 6. Story & Character assets
     generate_story_assets(

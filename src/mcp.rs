@@ -332,6 +332,64 @@ fn get_tool_definitions() -> Vec<Value> {
                 }
             }
         }),
+        // Section 3.8: MCP tool apply_customization
+        json!({
+            "name": "apply_customization",
+            "description": "Re-apply customization blocks to prompt.ko.md and prompt.h3.txt across shots (idempotent)",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "proj_dir": {
+                        "type": "string",
+                        "description": "Project directory path (default: .)"
+                    },
+                    "shot": {
+                        "type": "string",
+                        "description": "Optional target shot identifier (e.g. 0015 or shot_0015)"
+                    }
+                }
+            }
+        }),
+        // Section 3.8: MCP tool show_customization
+        json!({
+            "name": "show_customization",
+            "description": "Show summary of characters, traits, and shot overrides defined in customization layer",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "proj_dir": {
+                        "type": "string",
+                        "description": "Project directory path (default: .)"
+                    }
+                }
+            }
+        }),
+        // Issue 5: MCP tool customize_anchor
+        json!({
+            "name": "customize_anchor",
+            "description": "Composite character props (e.g. cap_ref) onto shot anchor frames (first_frame.jpg, last_frame.jpg)",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "proj_dir": {
+                        "type": "string",
+                        "description": "Project directory path (default: .)"
+                    },
+                    "shot": {
+                        "type": "string",
+                        "description": "Optional target shot identifier (e.g. 0015 or shot_0015)"
+                    },
+                    "character": {
+                        "type": "string",
+                        "description": "Optional target character identifier (e.g. walter)"
+                    },
+                    "force": {
+                        "type": "boolean",
+                        "description": "Force edit and overwrite existing edited frames"
+                    }
+                }
+            }
+        }),
     ]
 }
 
@@ -605,6 +663,38 @@ fn execute_tool(name: &str, args: &Value) -> Result<String> {
             });
             Ok(serde_json::to_string_pretty(&res)?)
         }
+        // Section 3.8: Execute apply_customization
+        "apply_customization" => {
+            let proj_dir_str = args.get("proj_dir").and_then(|v| v.as_str()).unwrap_or(".");
+            let proj_dir = Path::new(proj_dir_str);
+            let shot = args.get("shot").and_then(|v| v.as_str());
+            let modified = crate::customize::run_apply(proj_dir, shot)?;
+            Ok(format!(
+                "Applied customization to {} shots in {:?}",
+                modified.len(),
+                proj_dir
+            ))
+        }
+        // Section 3.8: Execute show_customization
+        "show_customization" => {
+            let proj_dir_str = args.get("proj_dir").and_then(|v| v.as_str()).unwrap_or(".");
+            let proj_dir = Path::new(proj_dir_str);
+            crate::customize::generate_show_summary(proj_dir)
+        }
+        // Issue 5: Execute customize_anchor
+        "customize_anchor" => {
+            let proj_dir_str = args.get("proj_dir").and_then(|v| v.as_str()).unwrap_or(".");
+            let proj_dir = Path::new(proj_dir_str);
+            let shot = args.get("shot").and_then(|v| v.as_str());
+            let character = args.get("character").and_then(|v| v.as_str());
+            let force = args.get("force").and_then(|v| v.as_bool()).unwrap_or(false);
+
+            let edited = crate::anchor::run_anchor_edit(proj_dir, shot, character, force)?;
+            Ok(format!(
+                "Successfully processed anchor edits for {} shot(s)",
+                edited.len()
+            ))
+        }
         _ => anyhow::bail!("Unknown tool: {}", name),
     }
 }
@@ -634,7 +724,11 @@ mod tests {
         assert!(names.contains(&"render_shot"));
         assert!(names.contains(&"assemble_movie"));
         assert!(names.contains(&"pool_status"));
-        assert_eq!(names.len(), 7);
+        // Section 3.8: Verify new MCP tools and updated count expectation (10)
+        assert!(names.contains(&"apply_customization"));
+        assert!(names.contains(&"show_customization"));
+        assert!(names.contains(&"customize_anchor"));
+        assert_eq!(names.len(), 10);
     }
 
     #[test]
@@ -658,6 +752,7 @@ mod tests {
         let tools_resp = handle_request(&tools_req).expect("Expected tools/list response");
         assert_eq!(tools_resp["id"], 2);
         let list = tools_resp["result"]["tools"].as_array().unwrap();
-        assert_eq!(list.len(), 7);
+        // Section 3.8 & Issue 5: Expect 10 tools
+        assert_eq!(list.len(), 10);
     }
 }

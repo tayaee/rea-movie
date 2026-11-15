@@ -17,6 +17,9 @@ pub struct TimelineShotItem {
     pub anchor: String,
     #[serde(default)]
     pub assignee: String,
+    // Section 3.4: Character casting stored in timeline.json
+    #[serde(default)]
+    pub characters: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
