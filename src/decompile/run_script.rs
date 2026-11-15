@@ -69,10 +69,10 @@ cd "$PROJ_ROOT"
 
 # 3. Execute render then assemble
 echo "==> Running render step..."
-"$BIN" render $SHOT_ARG $SMOKE_FLAG $FORCE_FLAG $FORCE_VIDEO_ONLY_FLAG ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}
+(set -x; "$BIN" render $SHOT_ARG $SMOKE_FLAG $FORCE_FLAG $FORCE_VIDEO_ONLY_FLAG ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"})
 
 echo "==> Running assemble step..."
-"$BIN" assemble $SMOKE_FLAG $FORCE_FLAG
+(set -x; "$BIN" assemble $SMOKE_FLAG $FORCE_FLAG)
 
 echo "==> Run completed successfully."
 "#;
@@ -90,4 +90,34 @@ echo "==> Run completed successfully."
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn generated_run_sh_echoes_final_commands() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        generate_run_script(dir.path()).expect("generate run.sh");
+        let content = std::fs::read_to_string(dir.path().join("run.sh")).expect("read run.sh");
+        assert!(
+            content.contains("(set -x; \"$BIN\" render"),
+            "render step must echo via set -x"
+        );
+        assert!(
+            content.contains("(set -x; \"$BIN\" assemble"),
+            "assemble step must echo via set -x"
+        );
+        let output = std::process::Command::new("bash")
+            .arg("-n")
+            .arg(dir.path().join("run.sh"))
+            .output()
+            .expect("bash -n");
+        assert!(
+            output.status.success(),
+            "run.sh must be valid bash: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 }
