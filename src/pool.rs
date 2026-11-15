@@ -591,7 +591,7 @@ case "$ENGINE" in
   *) echo "Invalid H3 engine: $ENGINE (expected fl2va or ref2va)" >&2; exit 2 ;;
 esac
 
-WORKSPACE="${{REA_MOVIE_WORKSPACE:-/rosenas/data/rea-movie-workspace}}"
+WORKSPACE="${{REA_MOVIE_WORKSPACE:-$HOME/rea-movie-workspace}}"
 NODE_NAME="${{REA_MOVIE_NODE_NAME:-$(hostname)}}"
 BASE_PORT="${{REA_MOVIE_BASE_PORT:-{base_port}}}"
 MIN_AVAILABLE_KB="${{REA_MOVIE_MIN_AVAILABLE_KB:-{min_available_kb}}}"

@@ -71,7 +71,7 @@ fn default_base_port() -> u16 {
 }
 
 fn default_remote_workspace() -> String {
-    "/rosenas/data/rea-movie-workspace".to_string()
+    "~/rea-movie-workspace".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -184,10 +184,7 @@ mod tests {
         assert!(serialized.contains("rea-movie-workspace"));
         let deserialized: ProjectConfig = toml::from_str(&serialized).unwrap();
         assert_eq!(deserialized.pool.nodes.len(), 2);
-        assert_eq!(
-            deserialized.pool.remote_workspace,
-            "/rosenas/data/rea-movie-workspace"
-        );
+        assert_eq!(deserialized.pool.remote_workspace, "~/rea-movie-workspace");
     }
 
     #[test]
