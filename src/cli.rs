@@ -132,6 +132,10 @@ pub struct AssembleArgs {
     /// Use smoke profile (608x352, 10 steps) instead of prod
     #[arg(long = "smoke")]
     pub smoke: bool,
+
+    /// Force rebuild even when outputs are newer than all shot videos
+    #[arg(short = 'f', long = "force")]
+    pub force: bool,
 }
 
 #[derive(Debug, Args)]

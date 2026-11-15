@@ -363,6 +363,7 @@ pub fn run_decompile(opts: DecompileOptions) -> Result<PathBuf> {
         crate::assemble::run_assemble(crate::assemble::AssembleOptions {
             proj_dir: &proj_dir,
             smoke: opts.smoke,
+            force: opts.force,
         })?;
     }
 

@@ -11,6 +11,7 @@ use crate::timeline::TimelineManifest;
 pub struct AssembleOptions<'a> {
     pub proj_dir: &'a Path,
     pub smoke: bool,
+    pub force: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -47,16 +48,33 @@ pub fn run_assemble(opts: AssembleOptions) -> Result<()> {
     let final_movie_path = output_dir.join(format!("{}_{}.mp4", movie_name, profile));
     let compare_movie_path = output_dir.join(format!("{}_compare.mp4", movie_name));
 
+    if !opts.force
+        && outputs_up_to_date(&shots, &[&final_movie_path, &compare_movie_path])
+    {
+        println!(
+            "{} ==> {} is up-to-date",
+            crate::log::stamp(),
+            final_movie_path.display()
+        );
+        println!(
+            "{} ==> {} is up-to-date",
+            crate::log::stamp(),
+            compare_movie_path.display()
+        );
+        return Ok(());
+    }
+
     let trim_dir = output_dir.join(".trim");
     let assemble_result = (|| -> Result<()> {
         // 1. Assemble final movie
         assemble_final_movie(&shots, &final_movie_path, &output_dir)?;
-        println!("==> Final movie created: {}", final_movie_path.display());
+        println!("{} ==> Final movie created: {}", crate::log::stamp(), final_movie_path.display());
 
         // 2. Assemble side-by-side compare video
         assemble_compare_movie(&shots, &compare_movie_path, &output_dir)?;
         println!(
-            "==> Compare movie created: {}",
+            "{} ==> Compare movie created: {}",
+            crate::log::stamp(),
             compare_movie_path.display()
         );
         Ok(())
@@ -163,6 +181,37 @@ fn collect_assemble_shots(proj_dir: &Path, profile: &str) -> Result<Vec<Assemble
     }
 
     Ok(assemble_shots)
+}
+
+/// True when every output exists, is non-empty, and is at least as new as the
+/// newest input video (render outputs and original clips).
+fn outputs_up_to_date(shots: &[AssembleShot], outputs: &[&Path]) -> bool {
+    let mut newest_input: Option<std::time::SystemTime> = None;
+    for shot in shots {
+        for input in [&shot.render_video, &shot.orig_clip] {
+            let Ok(mtime) = fs::metadata(input).and_then(|meta| meta.modified()) else {
+                continue;
+            };
+            newest_input = Some(newest_input.map_or(mtime, |current| current.max(mtime)));
+        }
+    }
+    for output in outputs {
+        let Ok(meta) = fs::metadata(output) else {
+            return false;
+        };
+        if meta.len() == 0 {
+            return false;
+        }
+        let Ok(mtime) = meta.modified() else {
+            return false;
+        };
+        if let Some(newest) = newest_input {
+            if mtime < newest {
+                return false;
+            }
+        }
+    }
+    true
 }
 
 fn shot_number(shot_id: &str) -> u32 {
@@ -908,6 +957,42 @@ mod tests {
         let eff2 =
             prepare_effective_shots(&shots, &work_dir).expect("prepare effective shots reuse");
         assert_eq!(eff2[0].render_video, eff[0].render_video);
+    }
+
+    #[test]
+    fn test_outputs_up_to_date_uses_mtime() {
+        let tmp_dir = tempfile::tempdir().expect("create temp dir");
+        let render = tmp_dir.path().join("shot_0001.mp4");
+        let orig = tmp_dir.path().join("orig.mp4");
+        let final_movie = tmp_dir.path().join("movie_smoke.mp4");
+        let compare = tmp_dir.path().join("movie_compare.mp4");
+        for path in [&render, &orig, &final_movie, &compare] {
+            fs::write(path, b"dummy video content").unwrap();
+        }
+        let shots = vec![AssembleShot {
+            shot_id: "shot_0001".to_string(),
+            render_video: render.clone(),
+            orig_clip: orig.clone(),
+            duration: None,
+        }];
+
+        assert!(outputs_up_to_date(&shots, &[&final_movie, &compare]));
+
+        // A re-rendered input newer than the outputs forces a rebuild.
+        let newer = std::time::SystemTime::now() + std::time::Duration::from_secs(60);
+        std::fs::File::options()
+            .write(true)
+            .open(&render)
+            .unwrap()
+            .set_modified(newer)
+            .unwrap();
+        assert!(!outputs_up_to_date(&shots, &[&final_movie, &compare]));
+
+        // Missing or empty outputs are never up to date.
+        fs::remove_file(&compare).unwrap();
+        assert!(!outputs_up_to_date(&shots, &[&final_movie, &compare]));
+        fs::write(&compare, b"").unwrap();
+        assert!(!outputs_up_to_date(&shots, &[&final_movie, &compare]));
     }
 
     #[test]

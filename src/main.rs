@@ -63,6 +63,7 @@ fn main() -> Result<()> {
             let opts = assemble::AssembleOptions {
                 proj_dir: &args.proj_dir,
                 smoke: args.smoke,
+                force: args.force,
             };
             assemble::run_assemble(opts)?;
         }

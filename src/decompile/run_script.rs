@@ -72,7 +72,7 @@ echo "==> Running render step..."
 "$BIN" render $SHOT_ARG $SMOKE_FLAG $FORCE_FLAG $FORCE_VIDEO_ONLY_FLAG ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}
 
 echo "==> Running assemble step..."
-"$BIN" assemble $SMOKE_FLAG
+"$BIN" assemble $SMOKE_FLAG $FORCE_FLAG
 
 echo "==> Run completed successfully."
 "#;

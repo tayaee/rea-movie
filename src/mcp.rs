@@ -315,6 +315,10 @@ fn get_tool_definitions() -> Vec<Value> {
                     "smoke": {
                         "type": "boolean",
                         "description": "Assemble smoke profile instead of prod"
+                    },
+                    "force": {
+                        "type": "boolean",
+                        "description": "Rebuild even when outputs are newer than all shot videos"
                     }
                 }
             }
@@ -626,8 +630,9 @@ fn execute_tool(name: &str, args: &Value) -> Result<String> {
             let proj_dir_str = args.get("proj_dir").and_then(|v| v.as_str()).unwrap_or(".");
             let proj_dir = Path::new(proj_dir_str);
             let smoke = args.get("smoke").and_then(|v| v.as_bool()).unwrap_or(false);
+            let force = args.get("force").and_then(|v| v.as_bool()).unwrap_or(false);
 
-            let opts = AssembleOptions { proj_dir, smoke };
+            let opts = AssembleOptions { proj_dir, smoke, force };
             assemble::run_assemble(opts)?;
             Ok("Movie assembly finished successfully".to_string())
         }
