@@ -42,6 +42,7 @@ struct RenderBehavior {
 }
 
 pub fn run_render(opts: RenderOptions) -> Result<()> {
+    let started = Instant::now();
     let profile_name = if opts.smoke { "smoke" } else { "prod" };
     let config = load_project_config(opts.proj_dir)?;
     let profile = if opts.smoke {
@@ -53,10 +54,11 @@ pub fn run_render(opts: RenderOptions) -> Result<()> {
     let shots = load_render_shots(opts.proj_dir)?;
     let selected = select_shots(shots, opts.shot.as_deref(), opts.range.as_deref())?;
     if selected.is_empty() {
-        println!("==> No shots matched the requested filter");
+        println!("{} ==> No shots matched the requested filter", crate::log::stamp());
         return Ok(());
     }
 
+    let total_len: f64 = selected.iter().map(|shot| shot.duration).sum();
     let mock_h3 = opts.mock_h3 || mock_h3_from_environment();
     let behavior = RenderBehavior {
         force: opts.force || opts.force_video_only,
@@ -64,7 +66,8 @@ pub fn run_render(opts: RenderOptions) -> Result<()> {
         preserve_prompt: opts.force_video_only && !opts.force,
     };
     println!(
-        "==> Rendering {} shot(s) with {} profile (mock_h3={})",
+        "{} ==> Rendering {} shot(s) with {} profile (mock_h3={})",
+        crate::log::stamp(),
         selected.len(),
         profile_name,
         mock_h3
@@ -89,7 +92,7 @@ pub fn run_render(opts: RenderOptions) -> Result<()> {
                 .map(PoolEndpoint::base_url)
                 .collect::<Vec<_>>()
                 .join(", ");
-            println!("==> Engine group {} -> {}", engine.as_str(), urls);
+            println!("{} ==> Engine group {} -> {}", crate::log::stamp(), engine.as_str(), urls);
         }
 
         if mock_h3 || endpoints.len() <= 1 {
@@ -129,7 +132,8 @@ pub fn run_render(opts: RenderOptions) -> Result<()> {
                             break;
                         };
                         println!(
-                            "==> [Worker {}:{}] Rendering {}...",
+                            "{} ==> [Worker {}:{}] Rendering {}...",
+                            crate::log::stamp(),
                             endpoint.host, endpoint.port, shot.shot_id
                         );
                         if let Err(e) = render_shot(
@@ -156,7 +160,7 @@ pub fn run_render(opts: RenderOptions) -> Result<()> {
         }
     }
 
-    println!("==> Render complete (profile: {})", profile_name);
+    println!("{} ==> Render complete (profile: {}, length: {}, took {})", crate::log::stamp(), profile_name, crate::log::mmss(total_len), crate::log::took(started.elapsed()));
     Ok(())
 }
 
@@ -425,7 +429,7 @@ fn render_shot(
     }
 
     if !behavior.force && valid_nonempty_file(&target) {
-        println!("==> Skipping {} (target already exists)", shot.shot_id);
+        println!("{} ==> {} exists", crate::log::stamp(), target.display());
         return Ok(());
     }
 
@@ -435,7 +439,8 @@ fn render_shot(
         compile_prompt_file(&shot_dir, &meta)
             .with_context(|| format!("Failed to compile prompt for {}", shot.shot_id))?;
         println!(
-            "==> Compiled prompt.ko.md -> prompt.h3.txt for {}",
+            "{} ==> Compiled prompt.ko.md -> prompt.h3.txt for {}",
+            crate::log::stamp(),
             shot.shot_id
         );
     } else if behavior.preserve_prompt {
@@ -445,7 +450,7 @@ fn render_shot(
                 shot.shot_id
             );
         }
-        println!("==> Preserving existing prompt.h3.txt for {}", shot.shot_id);
+        println!("{} ==> Preserving existing prompt.h3.txt for {}", crate::log::stamp(), shot.shot_id);
     } else if !h3_path.is_file() {
         let meta = shot_meta(proj_dir, shot)?;
         compile_prompt_file(&shot_dir, &meta)?;
@@ -453,7 +458,7 @@ fn render_shot(
 
     if behavior.force {
         if let Some(backup) = backup_to_history(&target)? {
-            println!("==> Backed up {} to {}", shot.shot_id, backup.display());
+            println!("{} ==> Backed up {} to {}", crate::log::stamp(), shot.shot_id, backup.display());
         }
     }
 
@@ -473,7 +478,7 @@ fn render_shot(
             target.display()
         );
     }
-    println!("==> Rendered {}", target.display());
+    println!("{} ==> Rendered {}", crate::log::stamp(), target.display());
     Ok(())
 }
 

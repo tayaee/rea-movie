@@ -121,16 +121,17 @@ fn load_pool_config(proj_dir: &Path) -> ProjectConfig {
 }
 
 fn print_pool_status(config: &ProjectConfig) -> Result<()> {
-    println!("==> DGX Spark Pool Status");
-    println!("  Nodes: {}", config.pool.nodes.join(", "));
+    println!("{} ==> DGX Spark Pool Status", crate::log::stamp());
+    println!("{}   Nodes: {}", crate::log::stamp(), config.pool.nodes.join(", "));
     println!(
-        "  Default port: {} (dynamic scanning: {}..{})",
+        "{}   Default port: {} (dynamic scanning: {}..{})",
+        crate::log::stamp(),
         config.pool.base_port,
         config.pool.base_port,
         config.pool.base_port.saturating_add(PORT_SCAN_LIMIT)
     );
-    println!("  Remote workspace: {}", config.pool.remote_workspace);
-    println!("  H3 image: {}", H3_IMAGE);
+    println!("{}   Remote workspace: {}", crate::log::stamp(), config.pool.remote_workspace);
+    println!("{}   H3 image: {}", crate::log::stamp(), H3_IMAGE);
 
     let control_workspace = expand_home_path(&config.pool.remote_workspace);
     for node in &config.pool.nodes {
@@ -142,7 +143,8 @@ fn print_pool_status(config: &ProjectConfig) -> Result<()> {
         match state {
             Some(state) => {
                 println!(
-                    "  - {}: {} (engine={}, port={}, mem_available_kb={})",
+                    "{}   - {}: {} (engine={}, port={}, mem_available_kb={})",
+                    crate::log::stamp(),
                     node,
                     state.status,
                     state.engine.as_str(),
@@ -156,9 +158,9 @@ fn print_pool_status(config: &ProjectConfig) -> Result<()> {
             None => {
                 let open_port = discover_open_port(node, config.pool.base_port);
                 if let Some(port) = open_port {
-                    println!("  - {}: reachable (detected port={})", node, port);
+                    println!("{}   - {}: reachable (detected port={})", crate::log::stamp(), node, port);
                 } else {
-                    println!("  - {}: unreachable (no node-state found)", node);
+                    println!("{}   - {}: unreachable (no node-state found)", crate::log::stamp(), node);
                 }
             }
         }
@@ -187,9 +189,9 @@ fn generate_and_deploy_scripts(config: &ProjectConfig) -> Result<()> {
     };
     write_node_state(&workspace.join("node-state.json"), &control_state)?;
 
-    println!("==> DGX Spark launcher scripts generated");
-    println!("  Control workspace: {}", workspace.display());
-    println!("  Script: {}", script_path.display());
+    println!("{} ==> DGX Spark launcher scripts generated", crate::log::stamp());
+    println!("{}   Control workspace: {}", crate::log::stamp(), workspace.display());
+    println!("{}   Script: {}", crate::log::stamp(), script_path.display());
 
     for node in &config.pool.nodes {
         validate_hostname(node)?;
@@ -215,10 +217,11 @@ fn generate_and_deploy_scripts(config: &ProjectConfig) -> Result<()> {
             &script_path,
             &state_path,
         ) {
-            Ok(()) => println!("  - {}: deployed", node),
+            Ok(()) => println!("{}   - {}: deployed", crate::log::stamp(), node),
             Err(error) => {
                 println!(
-                    "  - {}: local cache ready, deployment skipped ({error:#})",
+                    "{}   - {}: local cache ready, deployment skipped ({error:#})",
+                    crate::log::stamp(),
                     node
                 );
             }

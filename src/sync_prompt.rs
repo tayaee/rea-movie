@@ -195,13 +195,14 @@ pub fn run_sync_prompt(opts: SyncPromptOptions) -> Result<()> {
 
         if h3_path.is_file() && !opts.force {
             println!(
-                "==> Skipping {} (prompt.h3.txt already exists)",
+                "{} ==> Skipping {} (prompt.h3.txt already exists)",
+                crate::log::stamp(),
                 item.shot_id
             );
             continue;
         }
         compile_prompt_file(&shot_dir, &meta)?;
-        println!("==> Compiled {}", item.shot_id);
+        println!("{} ==> Compiled {}", crate::log::stamp(), item.shot_id);
     }
     Ok(())
 }

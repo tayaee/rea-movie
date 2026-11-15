@@ -115,11 +115,12 @@ pub fn run_decompile(opts: DecompileOptions) -> Result<PathBuf> {
 
     // 3. Detect scenes and shot spans
     println!(
-        "==> Detecting scene cuts and building shot spans (max duration: {:.1}s)...",
+        "{} ==> Detecting scene cuts and building shot spans (max duration: {:.1}s)...",
+        crate::log::stamp(),
         max_dur
     );
     let spans = build_shot_spans(&input_str, opts.range, max_dur)?;
-    println!("==> Total shots identified: {}", spans.len());
+    println!("{} ==> Total shots identified: {}", crate::log::stamp(), spans.len());
 
     // 4. timeline.json setup & customization loading
     let timeline_path = proj_dir.join("timeline.json");
@@ -338,17 +339,18 @@ pub fn run_decompile(opts: DecompileOptions) -> Result<PathBuf> {
     // 7. run.sh
     generate_run_script(&proj_dir)?;
 
-    println!("==> Project decompile complete at: {:?}", proj_dir);
+    println!("{} ==> Project decompile complete at: {:?}", crate::log::stamp(), proj_dir);
     if media_dir != proj_dir {
         println!(
-            "==> Media workspace (clips & render outputs) separated at: {:?}",
+            "{} ==> Media workspace (clips & render outputs) separated at: {:?}",
+            crate::log::stamp(),
             media_dir
         );
     }
 
     // 8. If --run flag, invoke render and assemble
     if opts.run_after {
-        println!("==> Running automated render and assembly (--run)...");
+        println!("{} ==> Running automated render and assembly (--run)...", crate::log::stamp());
         crate::render::run_render(crate::render::RenderOptions {
             proj_dir: &proj_dir,
             shot: None,

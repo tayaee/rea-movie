@@ -23,7 +23,7 @@ pub struct AssembleShot {
 
 pub fn run_assemble(opts: AssembleOptions) -> Result<()> {
     let profile = if opts.smoke { "smoke" } else { "prod" };
-    println!("==> Running assemble step for profile: {}", profile);
+    println!("{} ==> Running assemble step for profile: {}", crate::log::stamp(), profile);
 
     let config = load_project_config(opts.proj_dir)?;
     let movie_name = resolve_movie_name(opts.proj_dir, &config);
@@ -33,7 +33,8 @@ pub fn run_assemble(opts: AssembleOptions) -> Result<()> {
         bail!("No shots found to assemble in {:?}", opts.proj_dir);
     }
     println!(
-        "==> Assembling {} shot(s) for movie: {}",
+        "{} ==> Assembling {} shot(s) for movie: {}",
+        crate::log::stamp(),
         shots.len(),
         movie_name
     );
@@ -68,7 +69,7 @@ pub fn run_assemble(opts: AssembleOptions) -> Result<()> {
 
     assemble_result?;
 
-    println!("==> Assemble complete for profile: {}", profile);
+    println!("{} ==> Assemble complete for profile: {}", crate::log::stamp(), profile);
     Ok(())
 }
 

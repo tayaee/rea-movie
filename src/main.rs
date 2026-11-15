@@ -5,6 +5,7 @@ mod config;
 // Section 3.1: Customization module
 mod customize;
 mod decompile;
+mod log;
 mod mcp;
 mod pool;
 mod render;
@@ -74,7 +75,8 @@ fn main() -> Result<()> {
                 let modified =
                     customize::run_apply(&apply_args.proj_dir, apply_args.shot.as_deref())?;
                 println!(
-                    "==> Applied customization to {} shots in {:?}",
+                    "{} ==> Applied customization to {} shots in {:?}",
+                    crate::log::stamp(),
                     modified.len(),
                     apply_args.proj_dir
                 );
@@ -91,7 +93,8 @@ fn main() -> Result<()> {
                     anchor_args.force,
                 )?;
                 println!(
-                    "==> Processed anchor edits for {} shot(s) in {:?}",
+                    "{} ==> Processed anchor edits for {} shot(s) in {:?}",
+                    crate::log::stamp(),
                     edited.len(),
                     anchor_args.proj_dir
                 );
