@@ -220,19 +220,31 @@ echo "PASS: Trimming works properly even when original clips are missing."
 # Check 5: Full breakingbad-s5e7-v2 project assembled duration (120.02s ±0.5s)
 # ------------------------------------------------------------------------------
 echo "--- [Check 5] Full breakingbad-s5e7-v2 assembly (120.02s ±0.5s) ---"
-BB_PROJ="/rosenas/data/rea-movie-projects/breakingbad-s5e7-v2"
+BB_PROJ="/rosenas/data/rea-movie-artifacts/h3-projects/breakingbad-s5e7-v2"
+if [[ ! -d "${BB_PROJ}" ]]; then
+  # Legacy fallback (pre h3-projects/h3-results layout)
+  BB_PROJ="/rosenas/data/rea-movie-projects/breakingbad-s5e7-v2"
+fi
 if [[ ! -d "${BB_PROJ}" ]]; then
   # Fallback to alternate NAS mount if available
-  BB_PROJ="/mynas/data/rea-movie-projects/breakingbad-s5e7-v2"
+  BB_PROJ="/mynas/data/rea-movie-artifacts/h3-projects/breakingbad-s5e7-v2"
 fi
 
 if [[ -d "${BB_PROJ}" && -f "${BB_PROJ}/timeline.json" ]]; then
   echo "  Assembling ${BB_PROJ} (smoke profile)..."
   "${BIN}" assemble --proj-dir "${BB_PROJ}" --smoke
 
-  BB_OUT="/rosenas/data/rea-movie-workspace/breakingbad-s5e7-v2/outputs/smoke/breakingbad-s5e7-v2_smoke.mp4"
-  BB_COMP="/rosenas/data/rea-movie-workspace/breakingbad-s5e7-v2/outputs/smoke/breakingbad-s5e7-v2_compare.mp4"
+  BB_OUT="/rosenas/data/rea-movie-artifacts/h3-results/breakingbad-s5e7-v2/outputs/smoke/breakingbad-s5e7-v2_smoke.mp4"
+  BB_COMP="/rosenas/data/rea-movie-artifacts/h3-results/breakingbad-s5e7-v2/outputs/smoke/breakingbad-s5e7-v2_compare.mp4"
 
+  if [[ ! -f "${BB_OUT}" ]]; then
+    BB_OUT="/rosenas/data/rea-movie-workspace/breakingbad-s5e7-v2/outputs/smoke/breakingbad-s5e7-v2_smoke.mp4"
+    BB_COMP="/rosenas/data/rea-movie-workspace/breakingbad-s5e7-v2/outputs/smoke/breakingbad-s5e7-v2_compare.mp4"
+  fi
+  if [[ ! -f "${BB_OUT}" ]]; then
+    BB_OUT="/mynas/data/rea-movie-artifacts/h3-results/breakingbad-s5e7-v2/outputs/smoke/breakingbad-s5e7-v2_smoke.mp4"
+    BB_COMP="/mynas/data/rea-movie-artifacts/h3-results/breakingbad-s5e7-v2/outputs/smoke/breakingbad-s5e7-v2_compare.mp4"
+  fi
   if [[ ! -f "${BB_OUT}" ]]; then
     BB_OUT="/mynas/data/rea-movie-workspace/breakingbad-s5e7-v2/outputs/smoke/breakingbad-s5e7-v2_smoke.mp4"
     BB_COMP="/mynas/data/rea-movie-workspace/breakingbad-s5e7-v2/outputs/smoke/breakingbad-s5e7-v2_compare.mp4"

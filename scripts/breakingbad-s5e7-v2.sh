@@ -3,14 +3,14 @@
 # breakingbad-s5e7-v2.sh
 # Breaking Bad S05E07 ("Say My Name") 앞부분 2분 역공학 프로젝트 생성
 # - 커스터마이징 레이어(customization/) 적용: Walter White 캐스팅 + KBO 야구모자 전역 트레이트
-# - Git 업로드용 역공학 프로젝트 경로: /mynas/data/rea-movie-projects/breakingbad-s5e7-v2/
-# - 입력 클립 및 렌더링/조립 출력 비디오 경로: /mynas/data/rea-movie-workspace/breakingbad-s5e7-v2/
+# - Git 업로드용 역공학 프로젝트 경로: /mynas/data/rea-movie-artifacts/h3-projects/breakingbad-s5e7-v2/
+# - 입력 클립 및 렌더링/조립 출력 비디오 경로: /mynas/data/rea-movie-artifacts/h3-results/breakingbad-s5e7-v2/
 # ==============================================================================
 
 set -euo pipefail
 
-PROJ_DIR="/mynas/data/rea-movie-projects/breakingbad-s5e7-v2"
-WORKSPACE_DIR="/mynas/data/rea-movie-workspace/breakingbad-s5e7-v2"
+PROJ_DIR="/mynas/data/rea-movie-artifacts/h3-projects/breakingbad-s5e7-v2"
+WORKSPACE_DIR="/mynas/data/rea-movie-artifacts/h3-results/breakingbad-s5e7-v2"
 SRC_VIDEO="BreakingBad5.E7.1080p.mkv"
 SRC_SRT="/mynas/data/video/KTV/Archive/A-Z/BreakingBad5/BreakingBad5.E7.1080p.en.srt"
 

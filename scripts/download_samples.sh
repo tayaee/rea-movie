@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # download_samples.sh
 # 퍼블릭 도메인(저작권 만료) 고전 명작 영화 5편과 저작권 설명 문서(.md)를
-# 공유 NAS 워크스페이스(/rosenas/data/rea-movie-workspace/sample_movies/)에 준비합니다.
+# 공유 NAS 아티팩트(/rosenas/data/rea-movie-artifacts/sample_movies/)에 준비합니다.
 # 이미 다운로드된 영상 파일이 존재하면 기본적으로 건너뛰며(Skip), --force 지정 시 재다운로드합니다.
 #
 # 사용법:
@@ -10,9 +10,9 @@
 #   ./download_samples.sh 1 --force      # 1번(샤레이드 1963) 강제 재다운로드
 set -euo pipefail
 
-WORKSPACE_DIR="${REA_MOVIE_WORKSPACE:-/rosenas/data/rea-movie-workspace}"
+WORKSPACE_DIR="${REA_MOVIE_WORKSPACE:-/rosenas/data/rea-movie-artifacts}"
 SAMPLE_DIR="$WORKSPACE_DIR/sample_movies"
-mkdir -p "$SAMPLE_DIR" "$WORKSPACE_DIR/projects"
+mkdir -p "$SAMPLE_DIR" "$WORKSPACE_DIR/h3-projects"
 
 FORCE=0
 FILTER_ID=""
@@ -36,7 +36,7 @@ write_copyright_docs() {
     cat > "$SAMPLE_DIR/01_charade_1963.md" <<'EOF'
 # 01. 샤레이드 (*Charade*, 1963)
 
-- **파일 경로**: `/rosenas/data/rea-movie-workspace/sample_movies/01_charade_1963.mp4`
+- **파일 경로**: `/rosenas/data/rea-movie-artifacts/sample_movies/01_charade_1963.mp4`
 - **감독**: 스탠리 도넌 (Stanley Donen)
 - **주연**: 케리 그랜트 (Cary Grant), 오드리 헵번 (Audrey Hepburn), 월터 매소 (Walter Matthau)
 - **개봉 연도**: 1963년 (미국, Universal Pictures 배급)
@@ -58,15 +58,15 @@ write_copyright_docs() {
 ## 🎬 `rea-movie` 실행 예시 (공유 워크스페이스에 프로젝트 자동 생성)
 
 ```bash
-# -o 생략 시 자동으로 /rosenas/data/rea-movie-workspace/projects/01_charade_1963 에 생성됩니다.
-rea-movie /rosenas/data/rea-movie-workspace/sample_movies/01_charade_1963.mp4 --range 00:01:00-00:02:00
+# -o 생략 시 자동으로 /rosenas/data/rea-movie-artifacts/h3-projects/01_charade_1963 에 생성됩니다.
+rea-movie /rosenas/data/rea-movie-artifacts/sample_movies/01_charade_1963.mp4 --range 00:01:00-00:02:00
 ```
 EOF
 
     cat > "$SAMPLE_DIR/02_superman_mad_scientist_1941.md" <<'EOF'
 # 02. 슈퍼맨: 매드 사이언티스트 (*Superman: The Mad Scientist*, 1941)
 
-- **파일 경로**: `/rosenas/data/rea-movie-workspace/sample_movies/02_superman_mad_scientist_1941.mp4`
+- **파일 경로**: `/rosenas/data/rea-movie-artifacts/sample_movies/02_superman_mad_scientist_1941.mp4`
 - **제작 / 감독**: 플라이셔 스튜디오 (Fleischer Studios) / 데이브 플라이셔 (Dave Fleischer)
 - **성우**: 버드 콜리어 (Bud Collyer), 조안 알렉산더 (Joan Alexander)
 - **개봉 연도**: 1941년 9월 26일 (미국, Paramount Pictures 배급)
@@ -88,15 +88,15 @@ EOF
 ## 🎬 `rea-movie` 실행 예시 (공유 워크스페이스에 프로젝트 자동 생성)
 
 ```bash
-# -o 생략 시 자동으로 /rosenas/data/rea-movie-workspace/projects/02_superman_mad_scientist_1941 에 생성됩니다.
-rea-movie /rosenas/data/rea-movie-workspace/sample_movies/02_superman_mad_scientist_1941.mp4 --range 00:00:30-00:02:30
+# -o 생략 시 자동으로 /rosenas/data/rea-movie-artifacts/h3-projects/02_superman_mad_scientist_1941 에 생성됩니다.
+rea-movie /rosenas/data/rea-movie-artifacts/sample_movies/02_superman_mad_scientist_1941.mp4 --range 00:00:30-00:02:30
 ```
 EOF
 
     cat > "$SAMPLE_DIR/03_night_of_the_living_dead_1968.md" <<'EOF'
 # 03. 살아있는 시체들의 밤 (*Night of the Living Dead*, 1968)
 
-- **파일 경로**: `/rosenas/data/rea-movie-workspace/sample_movies/03_night_of_the_living_dead_1968.mp4`
+- **파일 경로**: `/rosenas/data/rea-movie-artifacts/sample_movies/03_night_of_the_living_dead_1968.mp4`
 - **감독**: 조지 A. 로메로 (George A. Romero)
 - **주연**: 듀안 존스 (Duane Jones), 주디스 오디어 (Judith O'Dea)
 - **개봉 연도**: 1968년 10월 1일 (미국, Image Ten 제작 / Walter Reade Organization 배급)
@@ -117,15 +117,15 @@ EOF
 ## 🎬 `rea-movie` 실행 예시 (공유 워크스페이스에 프로젝트 자동 생성)
 
 ```bash
-# -o 생략 시 자동으로 /rosenas/data/rea-movie-workspace/projects/03_night_of_the_living_dead_1968 에 생성됩니다.
-rea-movie /rosenas/data/rea-movie-workspace/sample_movies/03_night_of_the_living_dead_1968.mp4 --range 00:03:00-00:04:30
+# -o 생략 시 자동으로 /rosenas/data/rea-movie-artifacts/h3-projects/03_night_of_the_living_dead_1968 에 생성됩니다.
+rea-movie /rosenas/data/rea-movie-artifacts/sample_movies/03_night_of_the_living_dead_1968.mp4 --range 00:03:00-00:04:30
 ```
 EOF
 
     cat > "$SAMPLE_DIR/04_his_girl_friday_1940.md" <<'EOF'
 # 04. 히즈 걸 프라이데이 (*His Girl Friday*, 1940)
 
-- **파일 경로**: `/rosenas/data/rea-movie-workspace/sample_movies/04_his_girl_friday_1940.mp4`
+- **파일 경로**: `/rosenas/data/rea-movie-artifacts/sample_movies/04_his_girl_friday_1940.mp4`
 - **감독**: 하워드 혹스 (Howard Hawks)
 - **주연**: 케리 그랜트 (Cary Grant), 로잘린드 러셀 (Rosalind Russell)
 - **개봉 연도**: 1940년 1월 18일 (미국, Columbia Pictures)
@@ -145,15 +145,15 @@ EOF
 ## 🎬 `rea-movie` 실행 예시 (공유 워크스페이스에 프로젝트 자동 생성)
 
 ```bash
-# -o 생략 시 자동으로 /rosenas/data/rea-movie-workspace/projects/04_his_girl_friday_1940 에 생성됩니다.
-rea-movie /rosenas/data/rea-movie-workspace/sample_movies/04_his_girl_friday_1940.mp4 --range 00:02:00-00:03:00
+# -o 생략 시 자동으로 /rosenas/data/rea-movie-artifacts/h3-projects/04_his_girl_friday_1940 에 생성됩니다.
+rea-movie /rosenas/data/rea-movie-artifacts/sample_movies/04_his_girl_friday_1940.mp4 --range 00:02:00-00:03:00
 ```
 EOF
 
     cat > "$SAMPLE_DIR/05_sherlock_jr_1924.md" <<'EOF'
 # 05. 셜록 주니어 (*Sherlock Jr.*, 1924)
 
-- **파일 경로**: `/rosenas/data/rea-movie-workspace/sample_movies/05_sherlock_jr_1924.mp4`
+- **파일 경로**: `/rosenas/data/rea-movie-artifacts/sample_movies/05_sherlock_jr_1924.mp4`
 - **감독 / 주연**: 버스터 키튼 (Buster Keaton)
 - **개봉 연도**: 1924년 4월 21일 (미국, Metro Pictures)
 - **러닝타임**: 약 45분 (흑백 복원본)
@@ -172,8 +172,8 @@ EOF
 ## 🎬 `rea-movie` 실행 예시 (공유 워크스페이스에 프로젝트 자동 생성)
 
 ```bash
-# -o 생략 시 자동으로 /rosenas/data/rea-movie-workspace/projects/05_sherlock_jr_1924 에 생성됩니다.
-rea-movie /rosenas/data/rea-movie-workspace/sample_movies/05_sherlock_jr_1924.mp4 --range 00:15:00-00:16:30
+# -o 생략 시 자동으로 /rosenas/data/rea-movie-artifacts/h3-projects/05_sherlock_jr_1924 에 생성됩니다.
+rea-movie /rosenas/data/rea-movie-artifacts/sample_movies/05_sherlock_jr_1924.mp4 --range 00:15:00-00:16:30
 ```
 EOF
 }
