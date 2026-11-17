@@ -77,17 +77,32 @@ pub fn generate_prompts(
                     .unwrap_or(false)
                 && ctx.contact_sheet_path.exists()
             {
-                match try_minimax_m3_api(ctx, api_key.as_deref().unwrap().trim()) {
-                    Ok((ko, h3)) => {
-                        generated_ko = Some(ko);
-                        generated_h3 = Some(h3);
+                // Retry transient M3 failures (e.g. 529 overloaded) with backoff
+                // before falling back to the deterministic template.
+                for attempt in 0..3u32 {
+                    if attempt > 0 {
+                        std::thread::sleep(std::time::Duration::from_secs(5 * attempt as u64));
                     }
-                    Err(e) => {
-                        // Section 3.9: M3 API failure is logged and falls back per-shot without disabling process-wide
-                        eprintln!(
-                            "Warning: MiniMax-M3 API failed for shot {}: {:#}; falling back to deterministic template",
-                            ctx.shot_id, e
-                        );
+                    match try_minimax_m3_api(ctx, api_key.as_deref().unwrap().trim()) {
+                        Ok((ko, h3)) => {
+                            generated_ko = Some(ko);
+                            generated_h3 = Some(h3);
+                            break;
+                        }
+                        Err(e) => {
+                            // Section 3.9: M3 API failure is logged and falls back per-shot without disabling process-wide
+                            eprintln!(
+                                "Warning: MiniMax-M3 API failed for shot {} (attempt {}): {:#}; {}",
+                                ctx.shot_id,
+                                attempt + 1,
+                                e,
+                                if attempt < 2 {
+                                    "retrying"
+                                } else {
+                                    "falling back to deterministic template"
+                                }
+                            );
+                        }
                     }
                 }
             }
@@ -143,9 +158,9 @@ pub fn translate_lines_to_korean_m3(lines: &[String], api_key: &str) -> Result<V
         return Ok(Vec::new());
     }
     // Chunk to bound request size (full 10-episode batches can be large).
-    const CHUNK: usize = 100;
+    const CHUNK: usize = 30;
     let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(180))
+        .timeout(std::time::Duration::from_secs(600))
         .build()?;
 
     let system_prompt = "You are a professional Korean drama subtitle translator. Translate each English subtitle line into natural, conversational Korean that fits the same screen time. Keep speaker names, proper nouns transliterated, and punctuation light. Output a valid JSON array of strings with the exact same order and count as the input, no extra text.";
@@ -166,29 +181,63 @@ pub fn translate_lines_to_korean_m3(lines: &[String], api_key: &str) -> Result<V
             ]
         });
 
-        let resp = client
-            .post("https://api.minimax.io/v1/chat/completions")
-            .header("Authorization", format!("Bearer {}", api_key))
-            .json(&user_msg)
-            .send()?;
+        // Retry transient failures (e.g. 529 overloaded) with backoff.
+        let mut last_err: Option<anyhow::Error> = None;
+        let mut translated_chunk: Option<Vec<String>> = None;
+        for attempt in 0..3u32 {
+            if attempt > 0 {
+                std::thread::sleep(std::time::Duration::from_secs(5 * attempt as u64));
+            }
+            let attempt_result: Result<Vec<String>> = (|| {
+                let resp = client
+                    .post("https://api.minimax.io/v1/chat/completions")
+                    .header("Authorization", format!("Bearer {}", api_key))
+                    .json(&user_msg)
+                    .send()?;
 
-        if !resp.status().is_success() {
-            anyhow::bail!("MiniMax batch translation API returned status: {}", resp.status());
-        }
+                if !resp.status().is_success() {
+                    anyhow::bail!(
+                        "MiniMax batch translation API returned status: {}",
+                        resp.status()
+                    );
+                }
 
-        let json_val: serde_json::Value = resp.json()?;
-        let text = json_val["choices"][0]["message"]["content"]
-            .as_str()
-            .context("Missing content in MiniMax batch translation response")?;
-        let translated: Vec<String> = parse_llm_json(strip_think_blocks(text).trim())?;
-        if translated.len() != chunk.len() {
-            anyhow::bail!(
-                "Translation count mismatch: got {} lines for {} inputs",
-                translated.len(),
-                chunk.len()
-            );
+                let json_val: serde_json::Value = resp.json()?;
+                let text = json_val["choices"][0]["message"]["content"]
+                    .as_str()
+                    .context("Missing content in MiniMax batch translation response")?;
+                let translated: Vec<String> = parse_llm_json(strip_think_blocks(text).trim())?;
+                if translated.len() != chunk.len() {
+                    anyhow::bail!(
+                        "Translation count mismatch: got {} lines for {} inputs",
+                        translated.len(),
+                        chunk.len()
+                    );
+                }
+                Ok(translated)
+            })();
+            match attempt_result {
+                Ok(lines) => {
+                    translated_chunk = Some(lines);
+                    break;
+                }
+                Err(e) => {
+                    eprintln!(
+                        "Warning: batch translation attempt {} failed: {:#}",
+                        attempt + 1,
+                        e
+                    );
+                    last_err = Some(e);
+                }
+            }
         }
-        out.extend(translated);
+        match translated_chunk {
+            Some(lines) => out.extend(lines),
+            None => {
+                return Err(last_err
+                    .unwrap_or_else(|| anyhow::anyhow!("batch translation failed without error")));
+            }
+        }
     }
     Ok(out)
 }
