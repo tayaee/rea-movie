@@ -98,6 +98,11 @@ pub fn run_render(opts: RenderOptions) -> Result<()> {
         if mock_h3 || endpoints.len() <= 1 {
             let endpoint = endpoints.first();
             for shot in group {
+                println!(
+                    "{} Running {}",
+                    crate::log::stamp(),
+                    repro_base(endpoint, profile_name, &shot.shot_id)
+                );
                 render_shot(
                     opts.proj_dir,
                     profile_name,
@@ -132,9 +137,9 @@ pub fn run_render(opts: RenderOptions) -> Result<()> {
                             break;
                         };
                         println!(
-                            "{} ==> [Worker {}:{}] Rendering {}...",
+                            "{} Running {}",
                             crate::log::stamp(),
-                            endpoint.host, endpoint.port, shot.shot_id
+                            repro_base(Some(endpoint), profile_name, &shot.shot_id)
                         );
                         if let Err(e) = render_shot(
                             proj_dir,
@@ -162,6 +167,26 @@ pub fn run_render(opts: RenderOptions) -> Result<()> {
 
     println!("{} ==> Render complete (profile: {}, length: {}, took {})", crate::log::stamp(), profile_name, crate::log::mmss(total_len), crate::log::took(started.elapsed()));
     Ok(())
+}
+
+fn repro_base(endpoint: Option<&PoolEndpoint>, profile_name: &str, shot_id: &str) -> String {
+    let number = shot_id.trim_start_matches("shot_");
+    let smoke = if profile_name == "smoke" { " --smoke" } else { "" };
+    match endpoint {
+        Some(ep) => format!(
+            "REA_MOVIE_H3_ENDPOINT=http://{}:{} rea-movie render --shot {}{}",
+            ep.host, ep.port, number, smoke
+        ),
+        None => format!("rea-movie render --mock-h3 --shot {}{}", number, smoke),
+    }
+}
+
+fn repro_command_force(
+    endpoint: Option<&PoolEndpoint>,
+    profile_name: &str,
+    shot_id: &str,
+) -> String {
+    format!("{} --force", repro_base(endpoint, profile_name, shot_id))
 }
 
 fn load_project_config(proj_dir: &Path) -> Result<ProjectConfig> {
@@ -429,7 +454,23 @@ fn render_shot(
     }
 
     if !behavior.force && valid_nonempty_file(&target) {
-        println!("{} ==> {} exists", crate::log::stamp(), target.display());
+        let ko_path = shot_dir.join("prompt.ko.md");
+        let stamp = crate::log::stamp();
+        if prompt_is_newer(&ko_path, &target) {
+            let ko_abs = ko_path.canonicalize().unwrap_or_else(|_| {
+                std::env::current_dir()
+                    .map(|cwd| cwd.join(&ko_path))
+                    .unwrap_or(ko_path.clone())
+            });
+            println!("{stamp} {} outdated", target.display());
+            println!("{stamp} {} has changed", ko_abs.display());
+            println!(
+                "{stamp} ==> Suggested action: {}",
+                repro_command_force(endpoint, profile_name, &shot.shot_id)
+            );
+        } else {
+            println!("{stamp} {} up-to-date", target.display());
+        }
         return Ok(());
     }
 
@@ -491,6 +532,17 @@ fn valid_nonempty_file(path: &Path) -> bool {
     fs::metadata(path)
         .map(|metadata| metadata.is_file() && metadata.len() > 0)
         .unwrap_or(false)
+}
+
+/// True when prompt.ko.md was modified after the render target was written.
+fn prompt_is_newer(ko_path: &Path, target: &Path) -> bool {
+    match (
+        fs::metadata(ko_path).and_then(|meta| meta.modified()),
+        fs::metadata(target).and_then(|meta| meta.modified()),
+    ) {
+        (Ok(ko), Ok(out)) => ko > out,
+        _ => false,
+    }
 }
 
 fn backup_to_history(target: &Path) -> Result<Option<PathBuf>> {
@@ -834,6 +886,51 @@ mod tests {
             seed: 42,
             characters: vec!["S1".to_string()],
         }
+    }
+
+    #[test]
+    fn repro_command_pins_endpoint_and_profile() {
+        let endpoint = PoolEndpoint {
+            host: "spark2.local".to_string(),
+            port: 8000,
+            engine: None,
+        };
+        assert_eq!(
+            repro_base(Some(&endpoint), "smoke", "shot_0025"),
+            "REA_MOVIE_H3_ENDPOINT=http://spark2.local:8000 rea-movie render --shot 0025 --smoke"
+        );
+        assert_eq!(
+            repro_base(Some(&endpoint), "prod", "shot_0007"),
+            "REA_MOVIE_H3_ENDPOINT=http://spark2.local:8000 rea-movie render --shot 0007"
+        );
+        assert_eq!(
+            repro_base(None, "smoke", "shot_0001"),
+            "rea-movie render --mock-h3 --shot 0001 --smoke"
+        );
+        assert_eq!(
+            repro_command_force(Some(&endpoint), "smoke", "shot_0025"),
+            "REA_MOVIE_H3_ENDPOINT=http://spark2.local:8000 rea-movie render --shot 0025 --smoke --force"
+        );
+    }
+
+    #[test]
+    fn prompt_is_newer_detects_modified_prompt() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let ko = dir.path().join("prompt.ko.md");
+        let target = dir.path().join("shot_0001.mp4");
+        fs::write(&ko, b"prompt").unwrap();
+        fs::write(&target, b"video").unwrap();
+        assert!(!prompt_is_newer(&ko, &target));
+
+        let newer = std::time::SystemTime::now() + std::time::Duration::from_secs(60);
+        std::fs::File::options()
+            .write(true)
+            .open(&ko)
+            .unwrap()
+            .set_modified(newer)
+            .unwrap();
+        assert!(prompt_is_newer(&ko, &target));
+        assert!(!prompt_is_newer(&dir.path().join("missing.md"), &target));
     }
 
     #[test]

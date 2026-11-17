@@ -52,12 +52,12 @@ pub fn run_assemble(opts: AssembleOptions) -> Result<()> {
         && outputs_up_to_date(&shots, &[&final_movie_path, &compare_movie_path])
     {
         println!(
-            "{} ==> {} is up-to-date",
+            "{} {} up-to-date",
             crate::log::stamp(),
             final_movie_path.display()
         );
         println!(
-            "{} ==> {} is up-to-date",
+            "{} {} up-to-date",
             crate::log::stamp(),
             compare_movie_path.display()
         );
