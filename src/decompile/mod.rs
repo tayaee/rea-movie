@@ -173,44 +173,13 @@ pub fn run_decompile(opts: DecompileOptions) -> Result<PathBuf> {
     let media_shots_dir = media_dir.join("shots");
     std::fs::create_dir_all(&media_shots_dir)?;
 
-    let mut subtitle_cues = story::load_subtitle_cues(&input_str);
+    let subtitle_cues = story::load_subtitle_cues(&input_str);
     let has_subtitle_track = !subtitle_cues.is_empty();
     let dub_lang = opts.dub_lang.unwrap_or("ko");
-
-    // Batch-translate non-Korean subtitle cues to Korean once per project when
-    // dubbing in Korean with the M3 API available. Without this, English source
-    // subtitles would be tagged <d>[Korean] ...</d> but spoken in English.
-    // Offline mode keeps the deterministic per-shot table behavior.
-    if dub_lang.trim().to_ascii_lowercase().starts_with("ko")
-        && !opts.offline
-        && has_subtitle_track
-        && subtitle_cues.iter().any(|c| !prompt::is_korean_text(&c.text))
-    {
-        match std::env::var("MINIMAX_API_KEY") {
-            Ok(key) if !key.trim().is_empty() => {
-                let texts: Vec<String> = subtitle_cues.iter().map(|c| c.text.clone()).collect();
-                match prompt::translate_lines_to_korean_m3(&texts, key.trim()) {
-                    Ok(translated) => {
-                        for (cue, line) in subtitle_cues.iter_mut().zip(translated.into_iter()) {
-                            cue.text = line;
-                        }
-                        println!(
-                            "{} ==> Translated {} subtitle cues to Korean via MiniMax-M3",
-                            crate::log::stamp(),
-                            subtitle_cues.len()
-                        );
-                    }
-                    Err(e) => eprintln!(
-                        "Warning: subtitle batch translation failed ({:#}); keeping original text",
-                        e
-                    ),
-                }
-            }
-            _ => eprintln!(
-                "Warning: MINIMAX_API_KEY not set; keeping original subtitle text for Korean dub"
-            ),
-        }
-    }
+    let want_ko_dub = dub_lang.trim().to_ascii_lowercase().starts_with("ko");
+    let m3_key = std::env::var("MINIMAX_API_KEY")
+        .ok()
+        .filter(|k| !k.trim().is_empty());
 
     // Exactly-once cue assignment: each cue belongs to the single span
     // containing its start time, so rendered dialogue never repeats across
@@ -334,10 +303,36 @@ pub fn run_decompile(opts: DecompileOptions) -> Result<PathBuf> {
         // Prompts
         let ko_path = shot_dir.join("prompt.ko.md");
         let h3_path = shot_dir.join("prompt.h3.txt");
-        let span_subtitles = cue_assignment
+        let mut span_subtitles = cue_assignment
             .get(span_idx)
             .cloned()
             .unwrap_or_default();
+
+        // Per-shot EN->KO translation when dubbing in Korean (online + M3 key).
+        // Tiny per-shot requests survive cluster load spikes far better than one
+        // giant project-level call. Offline keeps the deterministic table behavior.
+        if want_ko_dub
+            && !opts.offline
+            && !span_subtitles.is_empty()
+            && span_subtitles.iter().any(|l| !prompt::is_korean_text(l))
+        {
+            match m3_key.as_deref() {
+                Some(key) => match prompt::translate_lines_to_korean_m3(
+                    &span_subtitles,
+                    key.trim(),
+                ) {
+                    Ok(translated) => span_subtitles = translated,
+                    Err(e) => eprintln!(
+                        "Warning: subtitle translation failed for {} ({:#}); keeping original text",
+                        span.shot_id, e
+                    ),
+                },
+                None => eprintln!(
+                    "Warning: MINIMAX_API_KEY not set; keeping original subtitle text for Korean dub in {}",
+                    span.shot_id
+                ),
+            }
+        }
 
         let prompt_ctx = PromptGenContext {
             shot_id: &span.shot_id,
