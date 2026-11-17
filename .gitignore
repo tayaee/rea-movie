@@ -19,10 +19,8 @@ dist/
 *.tar.gz
 
 # Generated movie projects / workspaces (heavy video I/O lives here, see src/config.rs)
-# When a project lives under .../rea-movie-projects/<name>, media root is
-# ../rea-movie-workspace/<name> so the project dir stays committable.
-/rea-movie-workspace/
-/rea-movie-projects/
+# When a project lives under .../rea-movie-artifacts/h3-projects/<name>, media root is
+# sibling ../h3-results/<name> so the project dir stays committable.
 projects/
 nodes/
 logs/

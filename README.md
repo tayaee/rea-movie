@@ -16,9 +16,10 @@ rea-movie --version
 
 ## Default paths (zero config)
 
-- Projects: `~/rea-movie-projects/<name>` (override with `-o` or `REA_MOVIE_PROJECTS`)
-- Render workspace: `~/rea-movie-workspace` (override with `[pool] remote_workspace` or `REA_MOVIE_WORKSPACE`)
-- On machines with a shared NAS, point both at it with symlinks: `ln -s /rosenas/data/rea-movie-projects ~/rea-movie-projects` and `ln -s /rosenas/data/rea-movie-workspace ~/rea-movie-workspace`.
+- Projects (git-tracked, lightweight): `~/rea-movie-artifacts/h3-projects/<name>` (override with `-o` or `REA_MOVIE_PROJECTS`)
+- Render outputs (heavy video): `~/rea-movie-artifacts/h3-results/<name>` (sibling `../h3-results/`, resolved automatically)
+- Pool workspace (serve-h3.sh, node-state): `~/rea-movie-artifacts` (override with `[pool] remote_workspace` or `REA_MOVIE_WORKSPACE`)
+- On machines with a shared NAS, point at it with a single symlink: `ln -s /rosenas/data/rea-movie-artifacts ~/rea-movie-artifacts`.
 
 ## Usage (via Claude)
 

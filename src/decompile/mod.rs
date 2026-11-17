@@ -45,7 +45,7 @@ pub fn run_decompile(opts: DecompileOptions) -> Result<PathBuf> {
     let input_abs = std::fs::canonicalize(input_path)?;
     let input_str = input_abs.to_string_lossy().to_string();
 
-    // 1. Determine project directory (default: ~/rea-movie-projects/<stem>)
+    // 1. Determine project directory (default: ~/rea-movie-artifacts/h3-projects/<stem>)
     let proj_dir: PathBuf = match opts.output_dir {
         Some(out) => PathBuf::from(out),
         None => {
@@ -55,8 +55,8 @@ pub fn run_decompile(opts: DecompileOptions) -> Result<PathBuf> {
                 .unwrap_or("movie_project");
             let projects_root = std::env::var("REA_MOVIE_PROJECTS").unwrap_or_else(|_| {
                 std::env::var("HOME")
-                    .map(|home| format!("{home}/rea-movie-projects"))
-                    .unwrap_or_else(|_| "/rosenas/data/rea-movie-projects".to_string())
+                    .map(|home| format!("{home}/rea-movie-artifacts/h3-projects"))
+                    .unwrap_or_else(|_| "/rosenas/data/rea-movie-artifacts/h3-projects".to_string())
             });
             let projects_dir = PathBuf::from(&projects_root);
             if std::fs::create_dir_all(&projects_dir).is_ok() {
@@ -83,7 +83,7 @@ pub fn run_decompile(opts: DecompileOptions) -> Result<PathBuf> {
         if !gitignore_path.exists() {
             let _ = std::fs::write(
                 &gitignore_path,
-                "# Heavy video/audio assets & renders are stored in ../rea-movie-workspace/\n*.mp4\n*.mkv\n*.wav\n/outputs/\n**/renders/\n",
+                "# Heavy video/audio assets & renders are stored in ../h3-results/\n*.mp4\n*.mkv\n*.wav\n/outputs/\n**/renders/\n",
             );
         }
     }

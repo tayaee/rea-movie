@@ -2,13 +2,17 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-/// Resolves the workspace media root for heavy video/audio files (`original_clip.mp4`,
+/// Resolves the media root for heavy video/audio files (`original_clip.mp4`,
 /// `original_audio.wav`, `renders/`, `outputs/`).
 ///
-/// When a project lives under `.../rea-movie-projects/<project_name>`, its media and
-/// rendered video outputs are separated into `../rea-movie-workspace/<project_name>`
-/// (`.../rea-movie-workspace/<project_name>`) so that the project directory itself remains
-/// lightweight and directly committable to a Git repository without `.mkv`/`.mp4`/`.wav` binaries.
+/// When a project lives under `.../rea-movie-artifacts/h3-projects/<project_name>`,
+/// its media and rendered video outputs are separated into the sibling
+/// `.../rea-movie-artifacts/h3-results/<project_name>` so that the project
+/// directory itself remains lightweight and directly committable to the
+/// `rea-movie-artifacts` Git repository without `.mkv`/`.mp4`/`.wav` binaries.
+///
+/// Legacy layout `.../rea-movie-projects/<name>` -> `.../rea-movie-workspace/<name>`
+/// is still recognized as a fallback for migration.
 pub fn resolve_media_root(proj_dir: &Path) -> PathBuf {
     let resolved = std::fs::canonicalize(proj_dir).unwrap_or_else(|_| {
         if proj_dir.is_absolute() {
@@ -21,7 +25,14 @@ pub fn resolve_media_root(proj_dir: &Path) -> PathBuf {
     });
     if let Some(proj_name) = resolved.file_name() {
         if let Some(parent) = resolved.parent() {
-            if parent.file_name().and_then(|n| n.to_str()) == Some("rea-movie-projects") {
+            let parent_name = parent.file_name().and_then(|n| n.to_str());
+            if parent_name == Some("h3-projects") {
+                if let Some(grandparent) = parent.parent() {
+                    return grandparent.join("h3-results").join(proj_name);
+                }
+            }
+            // Legacy fallback: rea-movie-projects -> rea-movie-workspace
+            if parent_name == Some("rea-movie-projects") {
                 if let Some(grandparent) = parent.parent() {
                     return grandparent.join("rea-movie-workspace").join(proj_name);
                 }
@@ -71,7 +82,7 @@ fn default_base_port() -> u16 {
 }
 
 fn default_remote_workspace() -> String {
-    "~/rea-movie-workspace".to_string()
+    "~/rea-movie-artifacts".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -181,18 +192,25 @@ mod tests {
         let serialized = toml::to_string(&cfg).unwrap();
         assert!(serialized.contains("spark1.local"));
         assert!(serialized.contains("spark2.local"));
-        assert!(serialized.contains("rea-movie-workspace"));
+        assert!(serialized.contains("rea-movie-artifacts"));
         let deserialized: ProjectConfig = toml::from_str(&serialized).unwrap();
         assert_eq!(deserialized.pool.nodes.len(), 2);
-        assert_eq!(deserialized.pool.remote_workspace, "~/rea-movie-workspace");
+        assert_eq!(deserialized.pool.remote_workspace, "~/rea-movie-artifacts");
     }
 
     #[test]
     fn test_resolve_media_root_separates_projects_and_workspace() {
-        let proj = Path::new("/rosenas/data/rea-movie-projects/breakingbad-s5e7");
+        let proj = Path::new("/rosenas/data/rea-movie-artifacts/h3-projects/breakingbad-s5e7");
         let media = resolve_media_root(proj);
         assert_eq!(
             media,
+            PathBuf::from("/rosenas/data/rea-movie-artifacts/h3-results/breakingbad-s5e7")
+        );
+
+        // Legacy layout still resolves for migration.
+        let legacy = Path::new("/rosenas/data/rea-movie-projects/breakingbad-s5e7");
+        assert_eq!(
+            resolve_media_root(legacy),
             PathBuf::from("/rosenas/data/rea-movie-workspace/breakingbad-s5e7")
         );
 

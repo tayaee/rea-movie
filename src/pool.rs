@@ -594,7 +594,7 @@ case "$ENGINE" in
   *) echo "Invalid H3 engine: $ENGINE (expected fl2va or ref2va)" >&2; exit 2 ;;
 esac
 
-WORKSPACE="${{REA_MOVIE_WORKSPACE:-$HOME/rea-movie-workspace}}"
+WORKSPACE="${{REA_MOVIE_WORKSPACE:-$HOME/rea-movie-artifacts}}"
 NODE_NAME="${{REA_MOVIE_NODE_NAME:-$(hostname)}}"
 BASE_PORT="${{REA_MOVIE_BASE_PORT:-{base_port}}}"
 MIN_AVAILABLE_KB="${{REA_MOVIE_MIN_AVAILABLE_KB:-{min_available_kb}}}"
@@ -711,7 +711,7 @@ mod tests {
 
     #[test]
     fn remote_workspace_validation_rejects_traversal() {
-        assert!(validate_remote_workspace("~/rea-movie-workspace").is_ok());
+        assert!(validate_remote_workspace("~/rea-movie-artifacts").is_ok());
         assert!(validate_remote_workspace("../other").is_err());
     }
 }

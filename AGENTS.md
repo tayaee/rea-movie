@@ -11,7 +11,7 @@
 - **에이전트 스킬 명칭**: `/rea-movie` (`skills/rea-movie/SKILL.md`)
 - **핵심 목표**:
   1. `mkv` / `mp4` 원본 영상을 입력받아 샷 분할, 타임스탬프 번인 스토리보드(`contact_sheet.jpg`), 대사/보이스 지문, 한국어 연출서(`prompt.ko.md`), MiniMax-H3 전용 영문 프롬프트(`prompt.h3.txt`)를 포함한 역공학 프로젝트를 생성한다.
-  2. DGX Spark 서버 풀(`spark1.local`, `spark2.local`, 공유 NAS 워크스페이스 `/rosenas/data/rea-movie-workspace`, 동적 포트 `8000`+)을 통해 `MiniMax-H3`(`fl2va` 기본, `ref2va`, `t2va`)로 각 샷을 렌더링하고, 본편 영상 및 좌우 1:1 비교 영상(`_compare.mp4`)을 조립한다.
+  2. DGX Spark 서버 풀(`spark1.local`, `spark2.local`, 공유 NAS `~/rea-movie-artifacts` → `/rosenas/data/rea-movie-artifacts`, 동적 포트 `8000`+)을 통해 `MiniMax-H3`(`fl2va` 기본, `ref2va`, `t2va`)로 각 샷을 렌더링하고, 본편 영상 및 좌우 1:1 비교 영상(`_compare.mp4`)을 조립한다.
 
 ---
 
