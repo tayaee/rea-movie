@@ -129,6 +129,70 @@ fn is_korean_dub(dub_lang: &str) -> bool {
     )
 }
 
+/// True when the text already contains Hangul (no translation needed).
+pub fn is_korean_text(line: &str) -> bool {
+    line.chars().any(|c| ('\u{AC00}'..='\u{D7A3}').contains(&c))
+}
+
+/// Batch-translate subtitle lines to natural conversational Korean via
+/// MiniMax-M3 in a single API call. Returns the same number of lines in the
+/// same order; fails when the count mismatches so callers can fall back to
+/// the original text.
+pub fn translate_lines_to_korean_m3(lines: &[String], api_key: &str) -> Result<Vec<String>> {
+    if lines.is_empty() {
+        return Ok(Vec::new());
+    }
+    // Chunk to bound request size (full 10-episode batches can be large).
+    const CHUNK: usize = 100;
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(180))
+        .build()?;
+
+    let system_prompt = "You are a professional Korean drama subtitle translator. Translate each English subtitle line into natural, conversational Korean that fits the same screen time. Keep speaker names, proper nouns transliterated, and punctuation light. Output a valid JSON array of strings with the exact same order and count as the input, no extra text.";
+
+    let mut out = Vec::with_capacity(lines.len());
+    for chunk in lines.chunks(CHUNK) {
+        let user_msg = serde_json::json!({
+            "model": "MiniMax-M3",
+            "messages": [
+                {
+                    "role": "system",
+                    "content": system_prompt
+                },
+                {
+                    "role": "user",
+                    "content": serde_json::to_string(chunk)?
+                }
+            ]
+        });
+
+        let resp = client
+            .post("https://api.minimax.io/v1/chat/completions")
+            .header("Authorization", format!("Bearer {}", api_key))
+            .json(&user_msg)
+            .send()?;
+
+        if !resp.status().is_success() {
+            anyhow::bail!("MiniMax batch translation API returned status: {}", resp.status());
+        }
+
+        let json_val: serde_json::Value = resp.json()?;
+        let text = json_val["choices"][0]["message"]["content"]
+            .as_str()
+            .context("Missing content in MiniMax batch translation response")?;
+        let translated: Vec<String> = parse_llm_json(strip_think_blocks(text).trim())?;
+        if translated.len() != chunk.len() {
+            anyhow::bail!(
+                "Translation count mismatch: got {} lines for {} inputs",
+                translated.len(),
+                chunk.len()
+            );
+        }
+        out.extend(translated);
+    }
+    Ok(out)
+}
+
 pub fn translate_line_to_korean(line: &str) -> String {
     let clean = line
         .replace("[spk:0]", "")
@@ -346,7 +410,7 @@ fn try_minimax_m3_api(ctx: &PromptGenContext, api_key: &str) -> Result<(String, 
                     {
                         "type": "text",
                         "text": format!(
-                            "Analyze shot '{}' ({:.2}s to {:.2}s, duration: {:.2}s). Speaker: {}. Audio peaks at: {:?}. Required dialogue line for prompt_ko: '{}'. Required dialogue clause for prompt_h3: '{}'.",
+                            "Analyze shot '{}' ({:.2}s to {:.2}s, duration: {:.2}s). Speaker: {}. Audio peaks at: {:?}. Required dialogue line for prompt_ko: '{}'. Required dialogue clause for prompt_h3: '{}'. Reproduce the original shot as closely as possible: match the camera framing, subject blocking, lighting, wardrobe, and background visible in the contact sheet exactly, changing nothing except what customization blocks require.",
                             ctx.shot_id, ctx.start_sec, ctx.end_sec, ctx.duration, ctx.speaker, ctx.audio_peaks, ko_dlg, h3_dlg
                         )
                     },

@@ -64,8 +64,8 @@ pub struct DecompileArgs {
     #[arg(long = "offline")]
     pub offline: bool,
 
-    /// Target dubbing language for generated dialogue (e.g. 'ko' or 'en', default: 'en')
-    #[arg(long = "dub-lang", visible_alias = "lang", default_value = "en")]
+    /// Target dubbing language for generated dialogue (e.g. 'ko' or 'en', default: 'ko')
+    #[arg(long = "dub-lang", visible_alias = "lang", default_value = "ko")]
     pub dub_lang: String,
 
     /// Custom visual/character modification applied to all shots (e.g. "주인공에게 KBO 야구모자를 씌워")

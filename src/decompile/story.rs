@@ -115,6 +115,44 @@ pub fn cues_for_span(cues: &[SubtitleCue], start_sec: f64, end_sec: f64) -> Vec<
         .collect()
 }
 
+/// Assign each subtitle cue to exactly one span: the span containing the cue's
+/// start time (with a small tolerance for boundary rounding). Without this,
+/// a cue longer than a micro-shot would be duplicated into every overlapping
+/// shot and the rendered dialogue would repeat after assembly.
+///
+/// Cues whose start falls outside every span (e.g. rounding at the range end)
+/// fall back to the span with the largest time overlap so no dialogue is
+/// dropped.
+pub fn assign_cues_to_spans(cues: &[SubtitleCue], spans: &[(f64, f64)]) -> Vec<Vec<String>> {
+    const EPS: f64 = 0.15;
+    let mut assigned: Vec<Vec<String>> = vec![Vec::new(); spans.len()];
+    for cue in cues {
+        // Primary: span containing the cue start.
+        let mut target: Option<usize> = None;
+        for (i, &(s, e)) in spans.iter().enumerate() {
+            if cue.start_sec >= s - EPS && cue.start_sec < e - EPS {
+                target = Some(i);
+                break;
+            }
+        }
+        // Fallback: span with the largest overlap.
+        if target.is_none() {
+            let mut best: Option<(usize, f64)> = None;
+            for (i, &(s, e)) in spans.iter().enumerate() {
+                let overlap = (cue.end_sec.min(e) - cue.start_sec.max(s)).max(0.0);
+                if overlap > 0.0 && best.map(|(_, b)| overlap > b).unwrap_or(true) {
+                    best = Some((i, overlap));
+                }
+            }
+            target = best.map(|(i, _)| i);
+        }
+        if let Some(i) = target {
+            assigned[i].push(cue.text.clone());
+        }
+    }
+    assigned
+}
+
 pub fn generate_story_assets(
     proj_dir: &Path,
     media_dir: &Path,
@@ -219,4 +257,49 @@ It contains {} sequential camera shots.
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cue(start_sec: f64, end_sec: f64, text: &str) -> SubtitleCue {
+        SubtitleCue {
+            start_sec,
+            end_sec,
+            text: text.to_string(),
+        }
+    }
+
+    #[test]
+    fn test_assign_cues_to_spans_exactly_once() {
+        // Micro-shots (webdrama fast cuts) with a cue longer than one shot.
+        let spans = vec![(0.0, 1.2), (1.2, 2.4), (2.4, 3.6), (3.6, 5.0)];
+        let cues = vec![
+            cue(0.5, 2.8, "This is a story about a dreamlike week"),
+            cue(3.7, 4.2, "Life is so unfair!"),
+        ];
+        let assigned = assign_cues_to_spans(&cues, &spans);
+        let total: usize = assigned.iter().map(|v| v.len()).sum();
+        assert_eq!(total, cues.len(), "each cue assigned exactly once");
+        assert_eq!(
+            assigned[0],
+            vec!["This is a story about a dreamlike week".to_string()]
+        );
+        assert!(assigned[1].is_empty());
+        assert!(assigned[2].is_empty());
+        assert_eq!(assigned[3], vec!["Life is so unfair!".to_string()]);
+    }
+
+    #[test]
+    fn test_assign_cues_boundary_and_range_end_fallback() {
+        let spans = vec![(0.0, 60.0), (60.0, 120.0)];
+        let cues = vec![
+            cue(60.0, 61.5, "boundary line"),
+            cue(119.95, 121.0, "closing line"),
+        ];
+        let assigned = assign_cues_to_spans(&cues, &spans);
+        assert_eq!(assigned[0].len(), 0);
+        assert_eq!(assigned[1].len(), 2);
+    }
 }
