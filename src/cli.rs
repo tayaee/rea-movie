@@ -27,8 +27,36 @@ pub enum Commands {
     // Section 3.8: Customize subcommand
     /// Manage prompt customization layer (characters, traits, and shot overrides)
     Customize(CustomizeArgs),
+    /// Lightweight whole-series pre-analysis (probe + 5s keyframes + subtitles) into <root>/story/
+    SeriesWatch(SeriesWatchArgs),
     /// Run MCP (Model Context Protocol) stdio server
     Mcp,
+}
+
+#[derive(Debug, Args)]
+pub struct SeriesWatchArgs {
+    /// Episode video files or directories (default: <out-root>/sources/)
+    pub inputs: Vec<String>,
+
+    /// Directory to scan for episode videos (e.g. <root>/sources)
+    #[arg(long = "source-dir")]
+    pub source_dir: Option<PathBuf>,
+
+    /// Series root; writes <root>/story/{world.json,characters.json,timeline-days.md}
+    #[arg(long = "out-root")]
+    pub out_root: Option<PathBuf>,
+
+    /// Do not call MiniMax-M3; write deterministic structured JSON/MD
+    #[arg(long = "offline")]
+    pub offline: bool,
+
+    /// Rebuild story files and re-sample cached probe data
+    #[arg(short = 'f', long = "force")]
+    pub force: bool,
+
+    /// Probe keyframe interval in seconds (default: 5.0)
+    #[arg(long = "interval", default_value = "5.0")]
+    pub interval: f64,
 }
 
 #[derive(Debug, Args)]

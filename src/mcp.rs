@@ -368,6 +368,41 @@ fn get_tool_definitions() -> Vec<Value> {
                 }
             }
         }),
+        // Issue 8: MCP tool series_watch
+        json!({
+            "name": "series_watch",
+            "description": "Lightweight whole-series pre-analysis (ffprobe + 5s keyframes + subtitles, cached in <root>/sources/) that writes <root>/story/world.json, characters.json and timeline-days.md",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "inputs": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Episode video files or directories (default: <out_root>/sources/)"
+                    },
+                    "source_dir": {
+                        "type": "string",
+                        "description": "Directory to scan for episode videos"
+                    },
+                    "out_root": {
+                        "type": "string",
+                        "description": "Series root directory (story/ is written here)"
+                    },
+                    "offline": {
+                        "type": "boolean",
+                        "description": "Skip MiniMax-M3 and write deterministic context"
+                    },
+                    "force": {
+                        "type": "boolean",
+                        "description": "Rebuild existing story files"
+                    },
+                    "interval": {
+                        "type": "number",
+                        "description": "Probe keyframe interval in seconds (default: 5.0)"
+                    }
+                }
+            }
+        }),
         // Issue 5: MCP tool customize_anchor
         json!({
             "name": "customize_anchor",
@@ -690,6 +725,46 @@ fn execute_tool(name: &str, args: &Value) -> Result<String> {
             let proj_dir = Path::new(proj_dir_str);
             crate::customize::generate_show_summary(proj_dir)
         }
+        // Issue 8: Execute series_watch
+        "series_watch" => {
+            let inputs: Vec<String> = args
+                .get("inputs")
+                .and_then(|v| v.as_array())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let source_dir = args
+                .get("source_dir")
+                .and_then(|v| v.as_str())
+                .map(std::path::PathBuf::from);
+            let out_root = args
+                .get("out_root")
+                .and_then(|v| v.as_str())
+                .map(std::path::PathBuf::from);
+            let report =
+                crate::series_watch::run_series_watch(crate::series_watch::SeriesWatchOptions {
+                    inputs: &inputs,
+                    source_dir: source_dir.as_deref(),
+                    out_root: out_root.as_deref(),
+                    offline: args
+                        .get("offline")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false),
+                    force: args.get("force").and_then(|v| v.as_bool()).unwrap_or(false),
+                    interval: args.get("interval").and_then(|v| v.as_f64()).unwrap_or(5.0),
+                })?;
+            let res = json!({
+                "story_dir": report.story_dir.to_string_lossy(),
+                "episodes": report.episodes,
+                "mode": report.mode,
+                "written": report.written.iter().map(|p| p.to_string_lossy().to_string()).collect::<Vec<_>>(),
+                "skipped": report.skipped.iter().map(|p| p.to_string_lossy().to_string()).collect::<Vec<_>>(),
+            });
+            Ok(serde_json::to_string_pretty(&res)?)
+        }
         // Issue 5: Execute customize_anchor
         "customize_anchor" => {
             let proj_dir_str = args.get("proj_dir").and_then(|v| v.as_str()).unwrap_or(".");
@@ -737,7 +812,9 @@ mod tests {
         assert!(names.contains(&"apply_customization"));
         assert!(names.contains(&"show_customization"));
         assert!(names.contains(&"customize_anchor"));
-        assert_eq!(names.len(), 10);
+        // Issue 8: series_watch
+        assert!(names.contains(&"series_watch"));
+        assert_eq!(names.len(), 11);
     }
 
     #[test]
@@ -761,7 +838,7 @@ mod tests {
         let tools_resp = handle_request(&tools_req).expect("Expected tools/list response");
         assert_eq!(tools_resp["id"], 2);
         let list = tools_resp["result"]["tools"].as_array().unwrap();
-        // Section 3.8 & Issue 5: Expect 10 tools
-        assert_eq!(list.len(), 10);
+        // Section 3.8, Issue 5 & Issue 8: Expect 11 tools
+        assert_eq!(list.len(), 11);
     }
 }

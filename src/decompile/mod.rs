@@ -14,7 +14,7 @@ use crate::timeline::{ShotMeta, TimelineManifest, TimelineShotItem};
 use extract::{extract_shot_references, ShotExtractPaths};
 use prompt::{generate_prompts, PromptGenContext};
 use run_script::generate_run_script;
-use scene::{build_shot_spans, probe_video_duration};
+use scene::{build_shot_spans, build_shot_spans_with, detect_scene_cuts, probe_video_duration};
 use story::generate_story_assets;
 
 pub struct DecompileOptions<'a> {
@@ -121,8 +121,41 @@ pub fn run_decompile(opts: DecompileOptions) -> Result<PathBuf> {
         }
     }
 
+    // Issue 8: per-source cache at <root>/sources/<source_id>/ (probe, scene
+    // cuts, subtitles, anchor frames, per-span clips). Reused across ranges
+    // and projects; disabled for standalone projects outside any root.
+    let source_cache = crate::sources::resolve_sources_dir(Some(&proj_dir), Path::new(input_path))
+        .and_then(
+            |dir| match crate::sources::SourceCache::open(&dir, Path::new(input_path)) {
+                Ok(cache) => Some(cache),
+                Err(e) => {
+                    eprintln!(
+                        "{} Warning: source cache unavailable at {:?} ({:#}); extracting without cache",
+                        crate::log::stamp(),
+                        dir,
+                        e
+                    );
+                    None
+                }
+            },
+        );
+    if let Some(cache) = &source_cache {
+        println!(
+            "{} ==> Source cache: {} (source_id: {})",
+            crate::log::stamp(),
+            cache.dir.display(),
+            cache.source_id
+        );
+    }
+
     let max_dur = opts.max_shot_duration.unwrap_or(8.0);
-    let total_dur = probe_video_duration(&input_str).unwrap_or(0.0);
+    let total_dur = source_cache
+        .as_ref()
+        .and_then(|c| c.probe(opts.force).ok())
+        .map(|p| p.duration)
+        .filter(|d| *d > 0.0)
+        .or_else(|| probe_video_duration(&input_str).ok())
+        .unwrap_or(0.0);
 
     // 2. rea-movie.toml
     let config_path = proj_dir.join("rea-movie.toml");
@@ -152,7 +185,16 @@ pub fn run_decompile(opts: DecompileOptions) -> Result<PathBuf> {
         crate::log::stamp(),
         max_dur
     );
-    let spans = build_shot_spans(&input_str, opts.range, max_dur)?;
+    let spans = if total_dur > 0.0 {
+        build_shot_spans_with(total_dur, opts.range, max_dur, |s, e| match &source_cache {
+            Some(cache) => cache
+                .scene_cuts(s, e, opts.force, |s, e| detect_scene_cuts(&input_str, s, e))
+                .unwrap_or_default(),
+            None => detect_scene_cuts(&input_str, s, e).unwrap_or_default(),
+        })?
+    } else {
+        build_shot_spans(&input_str, opts.range, max_dur)?
+    };
     println!(
         "{} ==> Total shots identified: {}",
         crate::log::stamp(),
@@ -210,7 +252,14 @@ pub fn run_decompile(opts: DecompileOptions) -> Result<PathBuf> {
     let media_shots_dir = media_dir.join("shots");
     std::fs::create_dir_all(&media_shots_dir)?;
 
-    let subtitle_cues = story::load_subtitle_cues(&input_str);
+    let subtitle_srt: Option<PathBuf> = match &source_cache {
+        Some(cache) => cache.subtitle_path(opts.force),
+        None => story::find_sibling_srt(&input_str),
+    };
+    let subtitle_cues = subtitle_srt
+        .as_deref()
+        .map(story::load_subtitle_cues_from)
+        .unwrap_or_default();
     let has_subtitle_track = !subtitle_cues.is_empty();
     let dub_lang = opts.dub_lang.unwrap_or("ko");
     let want_ko_dub = dub_lang.trim().to_ascii_lowercase().starts_with("ko");
@@ -276,6 +325,7 @@ pub fn run_decompile(opts: DecompileOptions) -> Result<PathBuf> {
             span.duration,
             &extract_paths,
             opts.force,
+            source_cache.as_ref(),
         )?;
 
         // Analyze audio peaks
@@ -324,6 +374,16 @@ pub fn run_decompile(opts: DecompileOptions) -> Result<PathBuf> {
             peaks,
             characters: final_cast,
         });
+    }
+
+    if let Some(cache) = &source_cache {
+        println!(
+            "{} ==> Source cache assets: {} reused, {} extracted ({})",
+            crate::log::stamp(),
+            cache.reused_count(),
+            cache.extracted_count(),
+            cache.source_id
+        );
     }
 
     // 5b. Scene grouping from visual discontinuity + dialogue silence + cap.
@@ -581,7 +641,7 @@ pub fn run_decompile(opts: DecompileOptions) -> Result<PathBuf> {
         &media_dir,
         spans.len(),
         total_dur,
-        Some(&input_str),
+        subtitle_srt.as_deref(),
     )?;
 
     // 7. run.sh

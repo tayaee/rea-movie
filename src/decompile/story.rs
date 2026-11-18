@@ -44,11 +44,18 @@ pub fn find_sibling_srt(video_path: &str) -> Option<PathBuf> {
     None
 }
 
+#[allow(dead_code)]
 pub fn load_subtitle_cues(video_path: &str) -> Vec<SubtitleCue> {
     let Some(srt_path) = find_sibling_srt(video_path) else {
         return Vec::new();
     };
-    let Ok(content) = std::fs::read_to_string(&srt_path) else {
+    load_subtitle_cues_from(&srt_path)
+}
+
+/// Parse cues from an explicit `.srt` path (issue 8: may come from the
+/// `<root>/sources/<id>/subtitles/` cache).
+pub fn load_subtitle_cues_from(srt_path: &Path) -> Vec<SubtitleCue> {
+    let Ok(content) = std::fs::read_to_string(srt_path) else {
         return Vec::new();
     };
     parse_srt(&content)
@@ -161,7 +168,7 @@ pub fn generate_story_assets(
     media_dir: &Path,
     shot_count: usize,
     total_duration: f64,
-    input_video_path: Option<&str>,
+    subtitle_srt: Option<&Path>,
 ) -> Result<()> {
     let story_dir = proj_dir.join("story");
     std::fs::create_dir_all(&story_dir)?;
@@ -204,10 +211,8 @@ It contains {} sequential camera shots.
 
     let transcript_path = story_dir.join("transcript.srt");
     if !transcript_path.exists() {
-        if let Some(vid) = input_video_path {
-            if let Some(src_srt) = find_sibling_srt(vid) {
-                let _ = std::fs::copy(&src_srt, &transcript_path);
-            }
+        if let Some(src_srt) = subtitle_srt {
+            let _ = std::fs::copy(src_srt, &transcript_path);
         }
         if !transcript_path.exists() {
             let srt_content = r#"1

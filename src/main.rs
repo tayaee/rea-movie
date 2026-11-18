@@ -10,6 +10,9 @@ mod mcp;
 mod pool;
 mod render;
 mod scenes;
+mod series_watch;
+// Issue 8: reusable <root>/sources/<source_id>/ cache
+mod sources;
 mod sync_prompt;
 mod timeline;
 
@@ -102,6 +105,23 @@ fn main() -> Result<()> {
                 );
             }
         },
+        Commands::SeriesWatch(args) => {
+            let report = series_watch::run_series_watch(series_watch::SeriesWatchOptions {
+                inputs: &args.inputs,
+                source_dir: args.source_dir.as_deref(),
+                out_root: args.out_root.as_deref(),
+                offline: args.offline,
+                force: args.force,
+                interval: args.interval,
+            })?;
+            println!(
+                "{} ==> series-watch: {} written, {} skipped ({})",
+                crate::log::stamp(),
+                report.written.len(),
+                report.skipped.len(),
+                report.story_dir.display()
+            );
+        }
         Commands::Mcp => {
             mcp::run_mcp_server()?;
         }
@@ -123,6 +143,7 @@ fn normalize_cli_args(args: Vec<String>) -> Vec<String> {
         "assemble",
         "pool",
         "customize",
+        "series-watch",
         "mcp",
         "help",
         "--help",

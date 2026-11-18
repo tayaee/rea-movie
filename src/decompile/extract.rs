@@ -3,6 +3,7 @@ use std::path::Path;
 use std::process::Command;
 
 use crate::decompile::contact_sheet::generate_contact_sheet;
+use crate::sources::{materialize_asset, SourceCache};
 
 pub struct ShotExtractPaths<'a> {
     pub media_shot_dir: &'a Path,
@@ -13,6 +14,29 @@ pub struct ShotExtractPaths<'a> {
     pub contact_sheet: &'a Path,
 }
 
+fn run_ffmpeg(args: &[String], what: &str) -> Result<()> {
+    let output = Command::new("ffmpeg")
+        .args(args)
+        .output()
+        .with_context(|| format!("Failed to run ffmpeg ({what})"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("ffmpeg {} failed: {}", what, stderr);
+    }
+    Ok(())
+}
+
+fn path_arg(p: &Path) -> String {
+    p.to_string_lossy().to_string()
+}
+
+/// Extract (or reuse) the per-shot reference assets.
+///
+/// Issue 8: when a [`SourceCache`] is given, every asset is looked up in
+/// `<root>/sources/<id>/` first — anchor frames by timestamp under
+/// `keyframes/`, clip/audio/contact sheet by span under `shots_cache/` — and
+/// copied instead of re-running ffmpeg. Fresh extractions are stored back
+/// into the cache. Existing project files are kept unless `force`.
 pub fn extract_shot_references(
     video_path: &str,
     start_sec: f64,
@@ -20,6 +44,7 @@ pub fn extract_shot_references(
     duration: f64,
     paths: &ShotExtractPaths,
     force: bool,
+    cache: Option<&SourceCache>,
 ) -> Result<()> {
     // 1. Ensure directory layout
     if let Some(parent) = paths.original_clip.parent() {
@@ -33,129 +58,124 @@ pub fn extract_shot_references(
     std::fs::create_dir_all(&prod_dir)?;
     std::fs::create_dir_all(&smoke_dir)?;
 
-    // 2. Extract original_clip.mp4
-    if force || !paths.original_clip.exists() {
-        let status = Command::new("ffmpeg")
-            .args([
-                "-y",
-                "-ss",
-                &format!("{:.3}", start_sec),
-                "-to",
-                &format!("{:.3}", end_sec),
-                "-i",
-                video_path,
-                "-c:v",
-                "libx264",
-                "-pix_fmt",
-                "yuv420p",
-                "-c:a",
-                "aac",
-                paths.original_clip.to_str().unwrap(),
-            ])
-            .output()
+    let span_dir = cache.map(|c| c.shot_cache_dir(start_sec, end_sec));
+    let span_cached = |name: &str| span_dir.as_ref().map(|d| d.join(name));
+    let video = video_path.to_string();
+    let start_s = format!("{:.3}", start_sec);
+    let end_s = format!("{:.3}", end_sec);
+
+    // 2. original_clip.mp4
+    let cached = span_cached("original_clip.mp4");
+    materialize_asset(
+        cache,
+        paths.original_clip,
+        cached.as_deref(),
+        force,
+        |out| {
+            run_ffmpeg(
+                &[
+                    "-y".into(),
+                    "-ss".into(),
+                    start_s.clone(),
+                    "-to".into(),
+                    end_s.clone(),
+                    "-i".into(),
+                    video.clone(),
+                    "-c:v".into(),
+                    "libx264".into(),
+                    "-pix_fmt".into(),
+                    "yuv420p".into(),
+                    "-c:a".into(),
+                    "aac".into(),
+                    path_arg(out),
+                ],
+                "original clip extract",
+            )
             .with_context(|| {
                 format!(
                     "Failed to extract original clip for shot at {:.2}s",
                     start_sec
                 )
-            })?;
+            })
+        },
+    )?;
 
-        if !status.status.success() {
-            let stderr = String::from_utf8_lossy(&status.stderr);
-            anyhow::bail!("ffmpeg original clip extract failed: {}", stderr);
-        }
-    }
-
-    // 3. Extract original_audio.wav
-    if force || !paths.original_audio.exists() {
-        let status = Command::new("ffmpeg")
-            .args([
-                "-y",
-                "-ss",
-                &format!("{:.3}", start_sec),
-                "-to",
-                &format!("{:.3}", end_sec),
-                "-i",
-                video_path,
-                "-vn",
-                "-acodec",
-                "pcm_s16le",
-                "-ar",
-                "32000",
-                "-ac",
-                "2",
-                paths.original_audio.to_str().unwrap(),
-            ])
-            .output()
+    // 3. original_audio.wav
+    let cached = span_cached("original_audio.wav");
+    materialize_asset(
+        cache,
+        paths.original_audio,
+        cached.as_deref(),
+        force,
+        |out| {
+            run_ffmpeg(
+                &[
+                    "-y".into(),
+                    "-ss".into(),
+                    start_s.clone(),
+                    "-to".into(),
+                    end_s.clone(),
+                    "-i".into(),
+                    video.clone(),
+                    "-vn".into(),
+                    "-acodec".into(),
+                    "pcm_s16le".into(),
+                    "-ar".into(),
+                    "32000".into(),
+                    "-ac".into(),
+                    "2".into(),
+                    path_arg(out),
+                ],
+                "original audio extract",
+            )
             .with_context(|| {
                 format!(
                     "Failed to extract original audio for shot at {:.2}s",
                     start_sec
                 )
-            })?;
+            })
+        },
+    )?;
 
-        if !status.status.success() {
-            let stderr = String::from_utf8_lossy(&status.stderr);
-            anyhow::bail!("ffmpeg original audio extract failed: {}", stderr);
-        }
+    // 4/5. Anchor frames: first (+2 frames or min(duration*0.1, 0.08)s) and
+    // last (-2 frames). Cached by absolute timestamp under keyframes/.
+    let offset = 0.08_f64.min(duration * 0.1);
+    let first_time = start_sec + offset;
+    let last_time = (end_sec - offset).max(start_sec);
+    for (target, t, what) in [
+        (paths.first_frame, first_time, "first frame extract"),
+        (paths.last_frame, last_time, "last frame extract"),
+    ] {
+        let cached = cache.map(|c| c.anchor_frame_path(t));
+        materialize_asset(cache, target, cached.as_deref(), force, |out| {
+            run_ffmpeg(
+                &[
+                    "-y".into(),
+                    "-ss".into(),
+                    format!("{:.3}", t),
+                    "-i".into(),
+                    video.clone(),
+                    "-vframes".into(),
+                    "1".into(),
+                    "-q:v".into(),
+                    "2".into(),
+                    path_arg(out),
+                ],
+                what,
+            )
+            .with_context(|| format!("Failed to extract frame at {:.3}s", t))
+        })?;
     }
 
-    // 4. Extract first_frame.jpg (+2 frames or min(duration*0.1, 0.08)s)
-    if force || !paths.first_frame.exists() {
-        let offset = 0.08_f64.min(duration * 0.1);
-        let first_time = start_sec + offset;
-        let status = Command::new("ffmpeg")
-            .args([
-                "-y",
-                "-ss",
-                &format!("{:.3}", first_time),
-                "-i",
-                video_path,
-                "-vframes",
-                "1",
-                "-q:v",
-                "2",
-                paths.first_frame.to_str().unwrap(),
-            ])
-            .output()
-            .with_context(|| format!("Failed to extract first frame at {:.3}s", first_time))?;
-
-        if !status.status.success() {
-            let stderr = String::from_utf8_lossy(&status.stderr);
-            anyhow::bail!("ffmpeg first frame extract failed: {}", stderr);
-        }
-    }
-
-    // 5. Extract last_frame.jpg (-2 frames or max(start, end - 0.08)s)
-    if force || !paths.last_frame.exists() {
-        let offset = 0.08_f64.min(duration * 0.1);
-        let last_time = (end_sec - offset).max(start_sec);
-        let status = Command::new("ffmpeg")
-            .args([
-                "-y",
-                "-ss",
-                &format!("{:.3}", last_time),
-                "-i",
-                video_path,
-                "-vframes",
-                "1",
-                "-q:v",
-                "2",
-                paths.last_frame.to_str().unwrap(),
-            ])
-            .output()
-            .with_context(|| format!("Failed to extract last frame at {:.3}s", last_time))?;
-
-        if !status.status.success() {
-            let stderr = String::from_utf8_lossy(&status.stderr);
-            anyhow::bail!("ffmpeg last frame extract failed: {}", stderr);
-        }
-    }
-
-    // 6. Generate contact_sheet.jpg
-    if force || !paths.contact_sheet.exists() {
-        generate_contact_sheet(video_path, start_sec, duration, paths.contact_sheet)?;
-    }
+    // 6. contact_sheet.jpg
+    let cached = span_cached("contact_sheet.jpg");
+    materialize_asset(
+        cache,
+        paths.contact_sheet,
+        cached.as_deref(),
+        force,
+        |out| generate_contact_sheet(video_path, start_sec, duration, out),
+    )?;
 
     Ok(())
 }

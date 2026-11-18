@@ -113,12 +113,29 @@ pub fn detect_scene_cuts(video_path: &str, start_bound: f64, end_bound: f64) -> 
     Ok(cuts)
 }
 
+#[allow(dead_code)]
 pub fn build_shot_spans(
     video_path: &str,
     range: Option<&str>,
     max_shot_duration: f64,
 ) -> Result<Vec<ShotSpan>> {
     let total_duration = probe_video_duration(video_path)?;
+    build_shot_spans_with(total_duration, range, max_shot_duration, |s, e| {
+        detect_scene_cuts(video_path, s, e).unwrap_or_default()
+    })
+}
+
+/// Build shot spans from a known total duration and a scene-cut provider
+/// (issue 8: the provider may serve cuts from `<root>/sources/<id>/scene_cuts.json`).
+pub fn build_shot_spans_with<F>(
+    total_duration: f64,
+    range: Option<&str>,
+    max_shot_duration: f64,
+    detect: F,
+) -> Result<Vec<ShotSpan>>
+where
+    F: FnOnce(f64, f64) -> Vec<f64>,
+{
     let (start_time, end_time) = match range {
         Some(r) => parse_time_range(r, total_duration)?,
         None => (0.0, total_duration),
@@ -132,7 +149,7 @@ pub fn build_shot_spans(
         );
     }
 
-    let detected_cuts = detect_scene_cuts(video_path, start_time, end_time).unwrap_or_default();
+    let detected_cuts = detect(start_time, end_time);
 
     let mut boundary_points = Vec::new();
     boundary_points.push(start_time);

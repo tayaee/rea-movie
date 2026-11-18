@@ -64,10 +64,7 @@ pub fn parse_node_list(raw: &str) -> Result<Vec<String>> {
         .filter(|s| !s.is_empty())
         .collect();
     if nodes.is_empty() || nodes.len() > 4 {
-        bail!(
-            "Pool supports 1-4 H3 nodes, got {}: {raw}",
-            nodes.len()
-        );
+        bail!("Pool supports 1-4 H3 nodes, got {}: {raw}", nodes.len());
     }
     for node in &nodes {
         validate_hostname(node)?;
@@ -243,10 +240,9 @@ fn prompt_line(prompt: &str) -> Result<String> {
     std::io::stdout().flush()?;
     let stdin = std::io::stdin();
     let mut line = String::new();
-    stdin
-        .lock()
-        .read_line(&mut line)
-        .context("Failed to read stdin (use --nodes/--base-port flags for non-interactive setup)")?;
+    stdin.lock().read_line(&mut line).context(
+        "Failed to read stdin (use --nodes/--base-port flags for non-interactive setup)",
+    )?;
     Ok(line.trim().to_string())
 }
 
@@ -288,7 +284,10 @@ fn run_pool_setup(proj_dir: &Path, args: &PoolSetupArgs) -> Result<()> {
             if !stdin_is_tty() {
                 bail!("No --nodes given and stdin is not a terminal. Example: rea-movie pool setup --nodes h3node1.local,h3node2.local");
             }
-            println!("{} ==> MiniMax-H3 pool setup (1-4 nodes)", crate::log::stamp());
+            println!(
+                "{} ==> MiniMax-H3 pool setup (1-4 nodes)",
+                crate::log::stamp()
+            );
             let count_raw = prompt_line("How many H3 nodes [1-4] (default 1)? ")?;
             let count: usize = if count_raw.trim().is_empty() {
                 1
@@ -909,7 +908,10 @@ mod tests {
 
     #[test]
     fn parse_node_list_accepts_one_to_four() {
-        assert_eq!(parse_node_list("h3node1.local").unwrap(), vec!["h3node1.local"]);
+        assert_eq!(
+            parse_node_list("h3node1.local").unwrap(),
+            vec!["h3node1.local"]
+        );
         assert_eq!(
             parse_node_list("a.local, b.local ,c.local,d.local").unwrap(),
             vec!["a.local", "b.local", "c.local", "d.local"]
