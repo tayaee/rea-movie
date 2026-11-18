@@ -108,6 +108,9 @@ pub fn parse_srt(content: &str) -> Vec<SubtitleCue> {
     cues
 }
 
+/// Legacy overlap-based lookup (kept for compatibility). Prefer
+/// [`assign_cues_to_spans`] for exactly-once assignment.
+#[allow(dead_code)]
 pub fn cues_for_span(cues: &[SubtitleCue], start_sec: f64, end_sec: f64) -> Vec<String> {
     cues.iter()
         .filter(|c| c.end_sec > start_sec + 0.15 && c.start_sec < end_sec - 0.15)

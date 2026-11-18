@@ -9,6 +9,7 @@ mod log;
 mod mcp;
 mod pool;
 mod render;
+mod scenes;
 mod sync_prompt;
 mod timeline;
 

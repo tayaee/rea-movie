@@ -163,6 +163,24 @@ pub fn compile_prompt_file(shot_dir: &Path, meta: &ShotMeta) -> Result<()> {
         }
     }
 
+    // Re-attach the scene continuity block (idempotent replace).
+    if !meta.scene_id.is_empty() {
+        if let Some(bible) = crate::scenes::load_bible(proj_dir, &meta.scene_id) {
+            for (path, block) in [
+                (&ko_path, crate::scenes::format_scene_block_ko(&bible)),
+                (&h3_path, crate::scenes::format_scene_block_h3(&bible)),
+            ] {
+                if path.is_file() {
+                    let content = std::fs::read_to_string(path)
+                        .with_context(|| format!("Failed to read {}", path.display()))?;
+                    let updated = crate::scenes::prepend_scene_block(&content, &block);
+                    std::fs::write(path, updated)
+                        .with_context(|| format!("Failed to write {}", path.display()))?;
+                }
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -266,6 +284,7 @@ mod tests {
             seed: 42,
             characters: vec!["S1".to_string()],
             audio_peaks: vec![],
+            scene_id: String::new(),
         }
     }
 

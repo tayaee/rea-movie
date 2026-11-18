@@ -561,6 +561,29 @@ fn apply_to_shot_dir(
             .with_context(|| format!("Failed to update {}", h3_path.display()))?;
     }
 
+    // Re-attach the scene continuity block (idempotent replace).
+    if let Ok(meta) = crate::timeline::ShotMeta::load_from_file(&shot_dir.join("shot.toml")) {
+        if !meta.scene_id.is_empty() {
+            let proj_dir = shot_dir
+                .parent()
+                .and_then(|p| p.parent())
+                .unwrap_or(shot_dir);
+            if let Some(bible) = crate::scenes::load_bible(proj_dir, &meta.scene_id) {
+                for (path, block) in [
+                    (shot_dir.join("prompt.ko.md"), crate::scenes::format_scene_block_ko(&bible)),
+                    (shot_dir.join("prompt.h3.txt"), crate::scenes::format_scene_block_h3(&bible)),
+                ] {
+                    if path.is_file() {
+                        if let Ok(content) = std::fs::read_to_string(&path) {
+                            let updated = crate::scenes::prepend_scene_block(&content, &block);
+                            let _ = std::fs::write(&path, updated);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // Update shot.toml characters if changed
     let meta_path = shot_dir.join("shot.toml");
     if meta_path.is_file() {

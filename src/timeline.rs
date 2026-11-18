@@ -20,6 +20,9 @@ pub struct TimelineShotItem {
     // Section 3.4: Character casting stored in timeline.json
     #[serde(default)]
     pub characters: Vec<String>,
+    // Scene grouping: which scene this shot belongs to (scene_XXXX).
+    #[serde(default)]
+    pub scene_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -36,6 +39,9 @@ pub struct ShotMeta {
     pub characters: Vec<String>,
     #[serde(default)]
     pub audio_peaks: Vec<f64>,
+    // Scene grouping: which scene this shot belongs to (scene_XXXX).
+    #[serde(default)]
+    pub scene_id: String,
 }
 
 fn default_anchor() -> String {
@@ -98,6 +104,7 @@ mod tests {
             seed: 42,
             characters: vec!["S1".to_string()],
             audio_peaks: vec![1.2, 3.5],
+            scene_id: "scene_0001".to_string(),
         };
         let s = toml::to_string(&meta).unwrap();
         assert!(s.contains("first_and_last"));

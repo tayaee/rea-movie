@@ -26,6 +26,7 @@ pub struct PromptGenContext<'a> {
 pub fn generate_prompts(
     ctx: &PromptGenContext,
     blocks: &[crate::customize::Block],
+    scene_bible: Option<&crate::scenes::SceneBible>,
     ko_path: &Path,
     h3_path: &Path,
 ) -> Result<()> {
@@ -118,9 +119,20 @@ pub fn generate_prompts(
         }
     };
 
-    // Section 3.2: Apply customization blocks to bases
-    let final_ko = crate::customize::apply_to_ko(&base_ko, blocks);
-    let final_h3 = crate::customize::apply_to_h3(&base_h3, blocks);
+    // Section 3.2: Apply customization blocks to bases, then prepend the
+    // scene continuity block (idempotent: old scene block is replaced).
+    let mut final_ko = crate::customize::apply_to_ko(&base_ko, blocks);
+    let mut final_h3 = crate::customize::apply_to_h3(&base_h3, blocks);
+    if let Some(bible) = scene_bible {
+        final_ko = crate::scenes::prepend_scene_block(
+            &final_ko,
+            &crate::scenes::format_scene_block_ko(bible),
+        );
+        final_h3 = crate::scenes::prepend_scene_block(
+            &final_h3,
+            &crate::scenes::format_scene_block_h3(bible),
+        );
+    }
 
     if let Some(parent) = ko_path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -619,6 +631,92 @@ pub fn detect_characters_with_m3(
     }
 
     Ok(detected)
+}
+
+// Generate one scene bible from the scene's contact sheets + dialogue via
+// MiniMax-M3 vision. One call per scene keeps character IDs, spatial layout
+// and eyeline grammar consistent across the scene's angle changes.
+pub fn generate_scene_bible_m3(
+    scene_id: &str,
+    start_sec: f64,
+    end_sec: f64,
+    shot_count: usize,
+    contact_sheets: &[std::path::PathBuf],
+    dialogue: &[(f64, String)],
+    api_key: &str,
+) -> Result<crate::scenes::SceneBible> {
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(300))
+        .build()?;
+
+    let system_prompt = "You are a TV drama script supervisor. Given timestamped storyboard frames and dialogue lines from ONE continuous scene, output valid JSON with exactly these keys, ALL VALUES AS STRINGS (dialogue_flow: one multi-line string, never an array): location, time_of_day, characters (array of {id, appearance, wardrobe}), spatial_map, eyeline_notes, dialogue_flow, lighting. Rules: label distinct people S1, S2, ... consistently across ALL frames by persistent appearance (face, hair, wardrobe) even when the camera angle changes; appearance must list re-identification features; spatial_map describes where each person is and faces; eyeline_notes state who looks toward whom (screen direction); dialogue_flow summarizes who speaks to whom in order. Output JSON only, no markdown.";
+    let dialogue_text = dialogue
+        .iter()
+        .map(|(t, line)| format!("[{t:.1}s] {line}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let mut content = vec![serde_json::json!({
+        "type": "text",
+        "text": format!(
+            "Scene {scene_id} ({start_sec:.1}s to {end_sec:.1}s, {shot_count} shots).\nDialogue:\n{dialogue_text}\n\nDescribe this single scene as JSON."
+        ),
+    })];
+    for sheet in contact_sheets.iter().take(8) {
+        let img_bytes = std::fs::read(sheet)
+            .with_context(|| format!("Failed to read {}", sheet.display()))?;
+        let base64_img = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, img_bytes);
+        content.push(serde_json::json!({
+            "type": "image_url",
+            "image_url": { "url": format!("data:image/jpeg;base64,{base64_img}") },
+        }));
+    }
+
+    let mut last_err: Option<anyhow::Error> = None;
+    for attempt in 0..3u32 {
+        if attempt > 0 {
+            std::thread::sleep(std::time::Duration::from_secs(5 * attempt as u64));
+        }
+        let attempt_result: Result<crate::scenes::SceneBible> = (|| {
+            let user_msg = serde_json::json!({
+                "model": "MiniMax-M3",
+                "messages": [
+                    { "role": "system", "content": system_prompt },
+                    { "role": "user", "content": content },
+                ]
+            });
+            let resp = client
+                .post("https://api.minimax.io/v1/chat/completions")
+                .header("Authorization", format!("Bearer {api_key}"))
+                .json(&user_msg)
+                .send()?;
+            if !resp.status().is_success() {
+                anyhow::bail!("MiniMax scene bible API returned status: {}", resp.status());
+            }
+            let json_val: serde_json::Value = resp.json()?;
+            let text = json_val["choices"][0]["message"]["content"]
+                .as_str()
+                .context("Missing content in scene bible response")?;
+            let mut bible: crate::scenes::SceneBible =
+                parse_llm_json(strip_think_blocks(text).trim())?;
+            bible.scene_id = scene_id.to_string();
+            bible.start_sec = start_sec;
+            bible.end_sec = end_sec;
+            bible.shot_count = shot_count;
+            if bible.characters.is_empty() {
+                anyhow::bail!("Scene bible has no characters");
+            }
+            Ok(bible)
+        })();
+        match attempt_result {
+            Ok(bible) => return Ok(bible),
+            Err(e) => {
+                eprintln!("Warning: scene bible attempt {} failed: {:#}", attempt + 1, e);
+                last_err = Some(e);
+            }
+        }
+    }
+    Err(last_err.unwrap_or_else(|| anyhow::anyhow!("scene bible generation failed")))
 }
 
 // Section 3.7: Translate --mod directive into English statement via MiniMax-M3 API

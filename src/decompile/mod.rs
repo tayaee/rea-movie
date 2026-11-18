@@ -188,6 +188,24 @@ pub fn run_decompile(opts: DecompileOptions) -> Result<PathBuf> {
         spans.iter().map(|sp| (sp.start_sec, sp.end_sec)).collect();
     let cue_assignment = story::assign_cues_to_spans(&subtitle_cues, &span_bounds);
 
+    // Loop A collects per-span media + cast; loop B writes shot.toml,
+    // timeline and prompts after scene grouping. SpanWork carries loop A
+    // results into loop B.
+    struct SpanWork {
+        span_idx: usize,
+        shot_id: String,
+        index: usize,
+        start_sec: f64,
+        end_sec: f64,
+        duration: f64,
+        is_chained_longtake: bool,
+        shot_dir: std::path::PathBuf,
+        contact_sheet: std::path::PathBuf,
+        peaks: Vec<f64>,
+        characters: Vec<String>,
+    }
+    let mut work_items: Vec<SpanWork> = Vec::new();
+
     for (span_idx, span) in spans.iter().enumerate() {
         let shot_dir = shots_dir.join(&span.shot_id);
         std::fs::create_dir_all(&shot_dir)?;
@@ -255,34 +273,187 @@ pub fn run_decompile(opts: DecompileOptions) -> Result<PathBuf> {
         // Section 3.4: customization/shots/<shot_id>.toml cast takes precedence
         let final_cast = custom.cast_for(&span.shot_id, &detected);
 
+        // Collect per-span work; shot.toml, timeline entries and prompts are
+        // written in loop B after scene grouping assigns every span to a scene.
+        work_items.push(SpanWork {
+            span_idx,
+            shot_id: span.shot_id.clone(),
+            index: span.index,
+            start_sec: span.start_sec,
+            end_sec: span.end_sec,
+            duration: span.duration,
+            is_chained_longtake: span.is_chained_longtake,
+            shot_dir,
+            contact_sheet,
+            peaks,
+            characters: final_cast,
+        });
+    }
+
+    // 5b. Scene grouping from visual discontinuity + dialogue silence + cap.
+    let hist_dists: Vec<f64> = spans
+        .iter()
+        .enumerate()
+        .map(|(i, span)| {
+            if i == 0 {
+                return 0.0;
+            }
+            let prev = shots_dir
+                .join(&spans[i - 1].shot_id)
+                .join("refs")
+                .join("contact_sheet.jpg");
+            let cur = shots_dir
+                .join(&span.shot_id)
+                .join("refs")
+                .join("contact_sheet.jpg");
+            crate::scenes::hist_distance_jpeg(&prev, &cur)
+        })
+        .collect();
+    let scenes = crate::scenes::group_scenes(&span_bounds, &subtitle_cues, &hist_dists);
+    println!(
+        "{} ==> Grouped {} shot(s) into {} scene(s)",
+        crate::log::stamp(),
+        spans.len(),
+        scenes.len()
+    );
+    let mut span_scene_id = vec![String::new(); spans.len()];
+    for scene in &scenes {
+        for idx in scene.span_start_idx..=scene.span_end_idx {
+            if let Some(slot) = span_scene_id.get_mut(idx) {
+                *slot = scene.scene_id.clone();
+            }
+        }
+    }
+
+    // 5c. Scene bibles: reuse when present, otherwise M3 online or
+    // deterministic offline. One vision call per scene (not per shot).
+    let mut bibles: std::collections::HashMap<String, crate::scenes::SceneBible> =
+        std::collections::HashMap::new();
+    for scene in &scenes {
+        let path = crate::scenes::scenes_dir(&proj_dir).join(format!("{}.json", scene.scene_id));
+        if path.is_file() && !opts.force {
+            if let Ok(bible) = crate::scenes::SceneBible::load_from_file(&path) {
+                bibles.insert(scene.scene_id.clone(), bible);
+                continue;
+            }
+        }
+        let mut cast: Vec<String> = work_items
+            .iter()
+            .filter(|w| {
+                w.span_idx >= scene.span_start_idx && w.span_idx <= scene.span_end_idx
+            })
+            .flat_map(|w| w.characters.clone())
+            .collect();
+        cast.sort();
+        cast.dedup();
+        let mut scene_cues: Vec<crate::decompile::story::SubtitleCue> = subtitle_cues
+            .iter()
+            .filter(|c| c.end_sec > scene.start_sec && c.start_sec < scene.end_sec)
+            .cloned()
+            .collect();
+        // Translate the scene's own cue lines (small request like the per-shot
+        // path) so the bible's dialogue_flow matches a Korean dub.
+        if want_ko_dub
+            && !opts.offline
+            && scene_cues.iter().any(|c| !prompt::is_korean_text(&c.text))
+        {
+            if let Some(key) = m3_key.as_deref() {
+                let texts: Vec<String> =
+                    scene_cues.iter().map(|c| c.text.clone()).collect();
+                match prompt::translate_lines_to_korean_m3(&texts, key.trim()) {
+                    Ok(translated) => {
+                        for (cue, line) in scene_cues.iter_mut().zip(translated.into_iter()) {
+                            cue.text = line;
+                        }
+                    }
+                    Err(e) => eprintln!(
+                        "Warning: scene dialogue translation failed for {} ({:#})",
+                        scene.scene_id, e
+                    ),
+                }
+            }
+        }
+        let bible = if !opts.offline && m3_key.as_deref().map(|k| !k.trim().is_empty()).unwrap_or(false) {
+            let sheets: Vec<std::path::PathBuf> = work_items
+                .iter()
+                .filter(|w| {
+                    w.span_idx >= scene.span_start_idx && w.span_idx <= scene.span_end_idx
+                })
+                .map(|w| w.shot_dir.join("refs").join("contact_sheet.jpg"))
+                .collect();
+            let dialogue: Vec<(f64, String)> = scene_cues
+                .iter()
+                .map(|c| (c.start_sec, c.text.clone()))
+                .collect();
+            match prompt::generate_scene_bible_m3(
+                &scene.scene_id,
+                scene.start_sec,
+                scene.end_sec,
+                scene.span_end_idx - scene.span_start_idx + 1,
+                &sheets,
+                &dialogue,
+                m3_key.as_deref().unwrap().trim(),
+            ) {
+                Ok(b) => b,
+                Err(e) => {
+                    eprintln!(
+                        "Warning: scene bible M3 failed for {} ({:#}); using offline bible",
+                        scene.scene_id, e
+                    );
+                    crate::scenes::offline_bible(scene, &cast, &subtitle_cues)
+                }
+            }
+        } else {
+            crate::scenes::offline_bible(scene, &cast, &subtitle_cues)
+        };
+        if let Err(e) = bible.save_to_file(&path) {
+            eprintln!("Warning: failed to save scene bible ({e:#})");
+        }
+        bibles.insert(scene.scene_id.clone(), bible);
+    }
+
+    // 5d. Loop B: shot.toml + timeline + prompts, all carrying scene context.
+    for work in &work_items {
+        let scene_id = span_scene_id
+            .get(work.span_idx)
+            .cloned()
+            .unwrap_or_default();
+        let scene_bible = bibles.get(&scene_id);
+
         // shot.toml
-        let shot_toml_path = shot_dir.join("shot.toml");
+        let shot_toml_path = work.shot_dir.join("shot.toml");
         let shot_meta = if shot_toml_path.exists() && !opts.force {
             let mut meta = ShotMeta::load_from_file(&shot_toml_path).unwrap_or_else(|_| ShotMeta {
-                shot_id: span.shot_id.clone(),
-                start_time: span.start_sec,
-                end_time: span.end_sec,
-                duration: span.duration,
+                shot_id: work.shot_id.clone(),
+                start_time: work.start_sec,
+                end_time: work.end_sec,
+                duration: work.duration,
                 anchor: "first_and_last".to_string(),
                 seed: 42,
-                characters: final_cast.clone(),
-                audio_peaks: peaks.clone(),
+                characters: work.characters.clone(),
+                audio_peaks: work.peaks.clone(),
+                scene_id: scene_id.clone(),
             });
             if meta.characters.is_empty() {
-                meta.characters = final_cast.clone();
+                meta.characters = work.characters.clone();
+                let _ = meta.save_to_file(&shot_toml_path);
+            }
+            if meta.scene_id.is_empty() {
+                meta.scene_id = scene_id.clone();
                 let _ = meta.save_to_file(&shot_toml_path);
             }
             meta
         } else {
             let meta = ShotMeta {
-                shot_id: span.shot_id.clone(),
-                start_time: span.start_sec,
-                end_time: span.end_sec,
-                duration: span.duration,
+                shot_id: work.shot_id.clone(),
+                start_time: work.start_sec,
+                end_time: work.end_sec,
+                duration: work.duration,
                 anchor: "first_and_last".to_string(),
-                seed: 42 + span.index as u64,
-                characters: final_cast.clone(),
-                audio_peaks: peaks.clone(),
+                seed: 42 + work.index as u64,
+                characters: work.characters.clone(),
+                audio_peaks: work.peaks.clone(),
+                scene_id: scene_id.clone(),
             };
             meta.save_to_file(&shot_toml_path)?;
             meta
@@ -290,21 +461,22 @@ pub fn run_decompile(opts: DecompileOptions) -> Result<PathBuf> {
 
         // Section 3.4: Record character cast in timeline item
         timeline_items.push(TimelineShotItem {
-            shot_id: span.shot_id.clone(),
-            start_sec: span.start_sec,
-            end_sec: span.end_sec,
-            duration: span.duration,
-            is_chained_longtake: span.is_chained_longtake,
+            shot_id: work.shot_id.clone(),
+            start_sec: work.start_sec,
+            end_sec: work.end_sec,
+            duration: work.duration,
+            is_chained_longtake: work.is_chained_longtake,
             anchor: shot_meta.anchor.clone(),
             assignee: "".to_string(),
             characters: shot_meta.characters.clone(),
+            scene_id: scene_id.clone(),
         });
 
         // Prompts
-        let ko_path = shot_dir.join("prompt.ko.md");
-        let h3_path = shot_dir.join("prompt.h3.txt");
+        let ko_path = work.shot_dir.join("prompt.ko.md");
+        let h3_path = work.shot_dir.join("prompt.h3.txt");
         let mut span_subtitles = cue_assignment
-            .get(span_idx)
+            .get(work.span_idx)
             .cloned()
             .unwrap_or_default();
 
@@ -324,30 +496,30 @@ pub fn run_decompile(opts: DecompileOptions) -> Result<PathBuf> {
                     Ok(translated) => span_subtitles = translated,
                     Err(e) => eprintln!(
                         "Warning: subtitle translation failed for {} ({:#}); keeping original text",
-                        span.shot_id, e
+                        work.shot_id, e
                     ),
                 },
                 None => eprintln!(
                     "Warning: MINIMAX_API_KEY not set; keeping original subtitle text for Korean dub in {}",
-                    span.shot_id
+                    work.shot_id
                 ),
             }
         }
 
         let prompt_ctx = PromptGenContext {
-            shot_id: &span.shot_id,
-            shot_index: span.index,
-            start_sec: span.start_sec,
-            end_sec: span.end_sec,
-            duration: span.duration,
-            is_chained_longtake: span.is_chained_longtake,
+            shot_id: &work.shot_id,
+            shot_index: work.index,
+            start_sec: work.start_sec,
+            end_sec: work.end_sec,
+            duration: work.duration,
+            is_chained_longtake: work.is_chained_longtake,
             audio_peaks: &shot_meta.audio_peaks,
             speaker: shot_meta
                 .characters
                 .first()
                 .map(|s| s.as_str())
                 .unwrap_or("S1"),
-            contact_sheet_path: &contact_sheet,
+            contact_sheet_path: &work.contact_sheet,
             offline: opts.offline,
             force: opts.force,
             dub_lang,
@@ -357,8 +529,8 @@ pub fn run_decompile(opts: DecompileOptions) -> Result<PathBuf> {
         };
 
         // Section 3.2 & Section 3.5: Resolve blocks and inject into prompts
-        let blocks = custom.blocks_for(&span.shot_id, &shot_meta.characters);
-        generate_prompts(&prompt_ctx, &blocks, &ko_path, &h3_path)?;
+        let blocks = custom.blocks_for(&work.shot_id, &shot_meta.characters);
+        generate_prompts(&prompt_ctx, &blocks, scene_bible, &ko_path, &h3_path)?;
     }
 
     // Section 3.4: Save final timeline manifest with resolved character casts
