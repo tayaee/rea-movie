@@ -51,7 +51,14 @@ pub fn group_scenes(
             .filter(|c| c.end_sec <= boundary + BOUNDARY_EPS)
             .map(|c| c.end_sec)
             .fold(f64::NEG_INFINITY, f64::max);
-        if !(prev_end > prev_start - BOUNDARY_EPS) {
+        // Silence must START at this boundary: the last dialogue must have
+        // ended inside the immediately preceding span. Otherwise a single long
+        // silence would split at every boundary it spans instead of exactly once.
+        // NaN-safe: only a strict Greater ordering counts as "ended here".
+        if !matches!(
+            prev_end.partial_cmp(&(prev_start - BOUNDARY_EPS)),
+            Some(std::cmp::Ordering::Greater)
+        ) {
             return 0.0;
         }
         let next_start = cues
@@ -440,11 +447,16 @@ mod tests {
         ];
         let hist = vec![0.1; 20];
         let scenes = group_scenes(&spans, &cues, &hist);
-        let mut covered = vec![false; 20];
+        let mut covered = [false; 20];
         for sc in &scenes {
-            for i in sc.span_start_idx..=sc.span_end_idx {
-                assert!(!covered[i], "span {i} in two scenes");
-                covered[i] = true;
+            for (i, slot) in covered
+                .iter_mut()
+                .enumerate()
+                .take(sc.span_end_idx + 1)
+                .skip(sc.span_start_idx)
+            {
+                assert!(!*slot, "span {i} in two scenes");
+                *slot = true;
             }
         }
         assert!(covered.iter().all(|&c| c));

@@ -562,7 +562,7 @@ fn apply_to_shot_dir(
     }
 
     // Re-attach the scene continuity block (idempotent replace).
-    if let Ok(meta) = crate::timeline::ShotMeta::load_from_file(&shot_dir.join("shot.toml")) {
+    if let Ok(meta) = crate::timeline::ShotMeta::load_from_file(shot_dir.join("shot.toml")) {
         if !meta.scene_id.is_empty() {
             let proj_dir = shot_dir
                 .parent()
