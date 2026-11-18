@@ -153,7 +153,11 @@ pub fn run_decompile(opts: DecompileOptions) -> Result<PathBuf> {
         max_dur
     );
     let spans = build_shot_spans(&input_str, opts.range, max_dur)?;
-    println!("{} ==> Total shots identified: {}", crate::log::stamp(), spans.len());
+    println!(
+        "{} ==> Total shots identified: {}",
+        crate::log::stamp(),
+        spans.len()
+    );
 
     // 4. timeline.json setup & customization loading
     let timeline_path = proj_dir.join("timeline.json");
@@ -217,8 +221,7 @@ pub fn run_decompile(opts: DecompileOptions) -> Result<PathBuf> {
     // Exactly-once cue assignment: each cue belongs to the single span
     // containing its start time, so rendered dialogue never repeats across
     // micro-shots after assembly.
-    let span_bounds: Vec<(f64, f64)> =
-        spans.iter().map(|sp| (sp.start_sec, sp.end_sec)).collect();
+    let span_bounds: Vec<(f64, f64)> = spans.iter().map(|sp| (sp.start_sec, sp.end_sec)).collect();
     let cue_assignment = story::assign_cues_to_spans(&subtitle_cues, &span_bounds);
 
     // Loop A collects per-span media + cast; loop B writes shot.toml,
@@ -372,9 +375,7 @@ pub fn run_decompile(opts: DecompileOptions) -> Result<PathBuf> {
         }
         let mut cast: Vec<String> = work_items
             .iter()
-            .filter(|w| {
-                w.span_idx >= scene.span_start_idx && w.span_idx <= scene.span_end_idx
-            })
+            .filter(|w| w.span_idx >= scene.span_start_idx && w.span_idx <= scene.span_end_idx)
             .flat_map(|w| w.characters.clone())
             .collect();
         cast.sort();
@@ -391,8 +392,7 @@ pub fn run_decompile(opts: DecompileOptions) -> Result<PathBuf> {
             && scene_cues.iter().any(|c| !prompt::is_korean_text(&c.text))
         {
             if let Some(key) = m3_key.as_deref() {
-                let texts: Vec<String> =
-                    scene_cues.iter().map(|c| c.text.clone()).collect();
+                let texts: Vec<String> = scene_cues.iter().map(|c| c.text.clone()).collect();
                 match prompt::translate_lines_to_korean_m3(&texts, key.trim()) {
                     Ok(translated) => {
                         for (cue, line) in scene_cues.iter_mut().zip(translated.into_iter()) {
@@ -406,12 +406,15 @@ pub fn run_decompile(opts: DecompileOptions) -> Result<PathBuf> {
                 }
             }
         }
-        let bible = if !opts.offline && m3_key.as_deref().map(|k| !k.trim().is_empty()).unwrap_or(false) {
+        let bible = if !opts.offline
+            && m3_key
+                .as_deref()
+                .map(|k| !k.trim().is_empty())
+                .unwrap_or(false)
+        {
             let sheets: Vec<std::path::PathBuf> = work_items
                 .iter()
-                .filter(|w| {
-                    w.span_idx >= scene.span_start_idx && w.span_idx <= scene.span_end_idx
-                })
+                .filter(|w| w.span_idx >= scene.span_start_idx && w.span_idx <= scene.span_end_idx)
                 .map(|w| w.shot_dir.join("refs").join("contact_sheet.jpg"))
                 .collect();
             let dialogue: Vec<(f64, String)> = scene_cues
@@ -584,7 +587,11 @@ pub fn run_decompile(opts: DecompileOptions) -> Result<PathBuf> {
     // 7. run.sh
     generate_run_script(&proj_dir)?;
 
-    println!("{} ==> Project decompile complete at: {:?}", crate::log::stamp(), proj_dir);
+    println!(
+        "{} ==> Project decompile complete at: {:?}",
+        crate::log::stamp(),
+        proj_dir
+    );
     if media_dir != proj_dir {
         println!(
             "{} ==> Media workspace (clips & render outputs) separated at: {:?}",
@@ -595,7 +602,10 @@ pub fn run_decompile(opts: DecompileOptions) -> Result<PathBuf> {
 
     // 8. If --run flag, invoke render and assemble
     if opts.run_after {
-        println!("{} ==> Running automated render and assembly (--run)...", crate::log::stamp());
+        println!(
+            "{} ==> Running automated render and assembly (--run)...",
+            crate::log::stamp()
+        );
         crate::render::run_render(crate::render::RenderOptions {
             proj_dir: &proj_dir,
             shot: None,

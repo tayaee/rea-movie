@@ -663,9 +663,10 @@ pub fn generate_scene_bible_m3(
         ),
     })];
     for sheet in contact_sheets.iter().take(8) {
-        let img_bytes = std::fs::read(sheet)
-            .with_context(|| format!("Failed to read {}", sheet.display()))?;
-        let base64_img = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, img_bytes);
+        let img_bytes =
+            std::fs::read(sheet).with_context(|| format!("Failed to read {}", sheet.display()))?;
+        let base64_img =
+            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, img_bytes);
         content.push(serde_json::json!({
             "type": "image_url",
             "image_url": { "url": format!("data:image/jpeg;base64,{base64_img}") },
@@ -711,7 +712,11 @@ pub fn generate_scene_bible_m3(
         match attempt_result {
             Ok(bible) => return Ok(bible),
             Err(e) => {
-                eprintln!("Warning: scene bible attempt {} failed: {:#}", attempt + 1, e);
+                eprintln!(
+                    "Warning: scene bible attempt {} failed: {:#}",
+                    attempt + 1,
+                    e
+                );
                 last_err = Some(e);
             }
         }

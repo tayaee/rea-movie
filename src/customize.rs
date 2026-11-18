@@ -570,8 +570,14 @@ fn apply_to_shot_dir(
                 .unwrap_or(shot_dir);
             if let Some(bible) = crate::scenes::load_bible(proj_dir, &meta.scene_id) {
                 for (path, block) in [
-                    (shot_dir.join("prompt.ko.md"), crate::scenes::format_scene_block_ko(&bible)),
-                    (shot_dir.join("prompt.h3.txt"), crate::scenes::format_scene_block_h3(&bible)),
+                    (
+                        shot_dir.join("prompt.ko.md"),
+                        crate::scenes::format_scene_block_ko(&bible),
+                    ),
+                    (
+                        shot_dir.join("prompt.h3.txt"),
+                        crate::scenes::format_scene_block_h3(&bible),
+                    ),
                 ] {
                     if path.is_file() {
                         if let Ok(content) = std::fs::read_to_string(&path) {

@@ -110,16 +110,21 @@ pub fn hist_distance_jpeg(a: &Path, b: &Path) -> f64 {
         let thumb = image::imageops::resize(&img, 64, 36, image::imageops::FilterType::Triangle);
         let mut h = [0u32; 64];
         for px in thumb.pixels() {
-            let idx = ((px[0] as usize / 64) * 16)
-                + ((px[1] as usize / 64) * 4)
-                + (px[2] as usize / 64);
+            let idx =
+                ((px[0] as usize / 64) * 16) + ((px[1] as usize / 64) * 4) + (px[2] as usize / 64);
             h[idx] += 1;
         }
         let total = (64 * 36) as f64;
         Some(h.map(|c| c as f64 / total))
     };
     match (hist(a), hist(b)) {
-        (Some(ha), Some(hb)) => ha.iter().zip(hb.iter()).map(|(x, y)| (x - y).abs()).sum::<f64>() / 2.0,
+        (Some(ha), Some(hb)) => {
+            ha.iter()
+                .zip(hb.iter())
+                .map(|(x, y)| (x - y).abs())
+                .sum::<f64>()
+                / 2.0
+        }
         _ => 0.0,
     }
 }
@@ -158,14 +163,9 @@ where
             }
             Ok(parts.join("\n"))
         }
-        fn visit_map<A: serde::de::MapAccess<'de>>(
-            self,
-            mut map: A,
-        ) -> Result<String, A::Error> {
+        fn visit_map<A: serde::de::MapAccess<'de>>(self, mut map: A) -> Result<String, A::Error> {
             let mut obj = serde_json::Map::new();
-            while let Some((k, v)) =
-                map.next_entry::<String, serde_json::Value>()?
-            {
+            while let Some((k, v)) = map.next_entry::<String, serde_json::Value>()? {
                 obj.insert(k, v);
             }
             Ok(serde_json::Value::Object(obj).to_string())
@@ -249,11 +249,7 @@ pub fn load_bible(proj_dir: &Path, scene_id: &str) -> Option<SceneBible> {
 
 /// Deterministic offline bible: no vision API, built from timing, cast and
 /// cue text. Keeps the pipeline reproducible without network.
-pub fn offline_bible(
-    scene: &SceneSpan,
-    cast: &[String],
-    cues: &[SubtitleCue],
-) -> SceneBible {
+pub fn offline_bible(scene: &SceneSpan, cast: &[String], cues: &[SubtitleCue]) -> SceneBible {
     let mut ids: Vec<String> = cast.to_vec();
     ids.sort();
     ids.dedup();
@@ -310,7 +306,10 @@ pub fn format_scene_block_ko(bible: &SceneBible) -> String {
         if !ch.wardrobe.is_empty() {
             desc.push_str(&format!(" / {}", ch.wardrobe));
         }
-        out.push_str(&format!("- 인물 {}: 씬 전체에서 동일한 외모·의상 유지\n", desc));
+        out.push_str(&format!(
+            "- 인물 {}: 씬 전체에서 동일한 외모·의상 유지\n",
+            desc
+        ));
     }
     if !bible.spatial_map.is_empty() {
         out.push_str(&format!("- 공간 배치: {}\n", bible.spatial_map));
@@ -347,7 +346,9 @@ pub fn format_scene_block_h3(bible: &SceneBible) -> String {
         if !ch.wardrobe.is_empty() {
             desc.push_str(&format!(" and wardrobe ({})", ch.wardrobe));
         }
-        desc.push_str(" in every shot of this scene; do not redesign the person between angle changes.");
+        desc.push_str(
+            " in every shot of this scene; do not redesign the person between angle changes.",
+        );
         parts.push(desc);
     }
     if !bible.spatial_map.is_empty() {
@@ -357,10 +358,16 @@ pub fn format_scene_block_h3(bible: &SceneBible) -> String {
         parts.push(format!("Eyelines: {}.", bible.eyeline_notes));
     }
     if !bible.dialogue_flow.is_empty() {
-        parts.push(format!("Dialogue flow: {}.", bible.dialogue_flow.replace('\n', " | ")));
+        parts.push(format!(
+            "Dialogue flow: {}.",
+            bible.dialogue_flow.replace('\n', " | ")
+        ));
     }
     if !bible.lighting.is_empty() {
-        parts.push(format!("Lighting: keep {} constant across shots.", bible.lighting));
+        parts.push(format!(
+            "Lighting: keep {} constant across shots.",
+            bible.lighting
+        ));
     }
     parts.push(format!(
         "<!-- rea-movie:scene:end id={} -->",
@@ -414,7 +421,9 @@ mod tests {
     #[test]
     fn test_group_scenes_silence_split() {
         // Continuous dialogue 0-10s, then 5s silence, then dialogue again.
-        let spans: Vec<(f64, f64)> = (0..12).map(|i| (i as f64 * 2.0, i as f64 * 2.0 + 2.0)).collect();
+        let spans: Vec<(f64, f64)> = (0..12)
+            .map(|i| (i as f64 * 2.0, i as f64 * 2.0 + 2.0))
+            .collect();
         let cues = vec![
             cue(0.5, 9.5, "continuous talk"),
             cue(15.0, 17.0, "after silence"),
@@ -430,7 +439,9 @@ mod tests {
     #[test]
     fn test_group_scenes_hist_split() {
         // No dialogue at all: visual cut alone must split.
-        let spans: Vec<(f64, f64)> = (0..4).map(|i| (i as f64 * 2.0, i as f64 * 2.0 + 2.0)).collect();
+        let spans: Vec<(f64, f64)> = (0..4)
+            .map(|i| (i as f64 * 2.0, i as f64 * 2.0 + 2.0))
+            .collect();
         let hist = vec![0.0, 0.2, 0.7, 0.15];
         let scenes = group_scenes(&spans, &[], &hist);
         assert_eq!(scenes.len(), 2);
@@ -440,11 +451,10 @@ mod tests {
 
     #[test]
     fn test_group_scenes_covers_every_span_once() {
-        let spans: Vec<(f64, f64)> = (0..20).map(|i| (i as f64 * 1.5, i as f64 * 1.5 + 1.5)).collect();
-        let cues = vec![
-            cue(0.5, 12.0, "long talk"),
-            cue(20.0, 29.0, "second talk"),
-        ];
+        let spans: Vec<(f64, f64)> = (0..20)
+            .map(|i| (i as f64 * 1.5, i as f64 * 1.5 + 1.5))
+            .collect();
+        let cues = vec![cue(0.5, 12.0, "long talk"), cue(20.0, 29.0, "second talk")];
         let hist = vec![0.1; 20];
         let scenes = group_scenes(&spans, &cues, &hist);
         let mut covered = [false; 20];
@@ -517,7 +527,8 @@ mod tests {
     }
 
     #[test]
-    fn test_bible_serde_roundtrip() {        let bible = offline_bible(
+    fn test_bible_serde_roundtrip() {
+        let bible = offline_bible(
             &SceneSpan {
                 scene_id: "scene_0001".to_string(),
                 span_start_idx: 0,

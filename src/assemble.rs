@@ -24,7 +24,11 @@ pub struct AssembleShot {
 
 pub fn run_assemble(opts: AssembleOptions) -> Result<()> {
     let profile = if opts.smoke { "smoke" } else { "prod" };
-    println!("{} ==> Running assemble step for profile: {}", crate::log::stamp(), profile);
+    println!(
+        "{} ==> Running assemble step for profile: {}",
+        crate::log::stamp(),
+        profile
+    );
 
     let config = load_project_config(opts.proj_dir)?;
     let movie_name = resolve_movie_name(opts.proj_dir, &config);
@@ -48,9 +52,7 @@ pub fn run_assemble(opts: AssembleOptions) -> Result<()> {
     let final_movie_path = output_dir.join(format!("{}_{}.mp4", movie_name, profile));
     let compare_movie_path = output_dir.join(format!("{}_compare.mp4", movie_name));
 
-    if !opts.force
-        && outputs_up_to_date(&shots, &[&final_movie_path, &compare_movie_path])
-    {
+    if !opts.force && outputs_up_to_date(&shots, &[&final_movie_path, &compare_movie_path]) {
         println!(
             "{} {} up-to-date",
             crate::log::stamp(),
@@ -68,7 +70,11 @@ pub fn run_assemble(opts: AssembleOptions) -> Result<()> {
     let assemble_result = (|| -> Result<()> {
         // 1. Assemble final movie
         assemble_final_movie(&shots, &final_movie_path, &output_dir)?;
-        println!("{} ==> Final movie created: {}", crate::log::stamp(), final_movie_path.display());
+        println!(
+            "{} ==> Final movie created: {}",
+            crate::log::stamp(),
+            final_movie_path.display()
+        );
 
         // 2. Assemble side-by-side compare video
         assemble_compare_movie(&shots, &compare_movie_path, &output_dir)?;
@@ -87,7 +93,11 @@ pub fn run_assemble(opts: AssembleOptions) -> Result<()> {
 
     assemble_result?;
 
-    println!("{} ==> Assemble complete for profile: {}", crate::log::stamp(), profile);
+    println!(
+        "{} ==> Assemble complete for profile: {}",
+        crate::log::stamp(),
+        profile
+    );
     Ok(())
 }
 

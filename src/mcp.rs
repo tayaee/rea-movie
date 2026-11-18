@@ -632,7 +632,11 @@ fn execute_tool(name: &str, args: &Value) -> Result<String> {
             let smoke = args.get("smoke").and_then(|v| v.as_bool()).unwrap_or(false);
             let force = args.get("force").and_then(|v| v.as_bool()).unwrap_or(false);
 
-            let opts = AssembleOptions { proj_dir, smoke, force };
+            let opts = AssembleOptions {
+                proj_dir,
+                smoke,
+                force,
+            };
             assemble::run_assemble(opts)?;
             Ok("Movie assembly finished successfully".to_string())
         }

@@ -54,7 +54,10 @@ pub fn run_render(opts: RenderOptions) -> Result<()> {
     let shots = load_render_shots(opts.proj_dir)?;
     let selected = select_shots(shots, opts.shot.as_deref(), opts.range.as_deref())?;
     if selected.is_empty() {
-        println!("{} ==> No shots matched the requested filter", crate::log::stamp());
+        println!(
+            "{} ==> No shots matched the requested filter",
+            crate::log::stamp()
+        );
         return Ok(());
     }
 
@@ -92,7 +95,12 @@ pub fn run_render(opts: RenderOptions) -> Result<()> {
                 .map(PoolEndpoint::base_url)
                 .collect::<Vec<_>>()
                 .join(", ");
-            println!("{} ==> Engine group {} -> {}", crate::log::stamp(), engine.as_str(), urls);
+            println!(
+                "{} ==> Engine group {} -> {}",
+                crate::log::stamp(),
+                engine.as_str(),
+                urls
+            );
         }
 
         if mock_h3 || endpoints.len() <= 1 {
@@ -165,13 +173,23 @@ pub fn run_render(opts: RenderOptions) -> Result<()> {
         }
     }
 
-    println!("{} ==> Render complete (profile: {}, length: {}, took {})", crate::log::stamp(), profile_name, crate::log::mmss(total_len), crate::log::took(started.elapsed()));
+    println!(
+        "{} ==> Render complete (profile: {}, length: {}, took {})",
+        crate::log::stamp(),
+        profile_name,
+        crate::log::mmss(total_len),
+        crate::log::took(started.elapsed())
+    );
     Ok(())
 }
 
 fn repro_base(endpoint: Option<&PoolEndpoint>, profile_name: &str, shot_id: &str) -> String {
     let number = shot_id.trim_start_matches("shot_");
-    let smoke = if profile_name == "smoke" { " --smoke" } else { "" };
+    let smoke = if profile_name == "smoke" {
+        " --smoke"
+    } else {
+        ""
+    };
     match endpoint {
         Some(ep) => format!(
             "REA_MOVIE_H3_ENDPOINT=http://{}:{} rea-movie render --shot {}{}",
@@ -491,7 +509,11 @@ fn render_shot(
                 shot.shot_id
             );
         }
-        println!("{} ==> Preserving existing prompt.h3.txt for {}", crate::log::stamp(), shot.shot_id);
+        println!(
+            "{} ==> Preserving existing prompt.h3.txt for {}",
+            crate::log::stamp(),
+            shot.shot_id
+        );
     } else if !h3_path.is_file() {
         let meta = shot_meta(proj_dir, shot)?;
         compile_prompt_file(&shot_dir, &meta)?;
@@ -499,7 +521,12 @@ fn render_shot(
 
     if behavior.force {
         if let Some(backup) = backup_to_history(&target)? {
-            println!("{} ==> Backed up {} to {}", crate::log::stamp(), shot.shot_id, backup.display());
+            println!(
+                "{} ==> Backed up {} to {}",
+                crate::log::stamp(),
+                shot.shot_id,
+                backup.display()
+            );
         }
     }
 
