@@ -91,12 +91,37 @@ rea-movie assemble
 rea-movie assemble --smoke
 ```
 
+### D. URL 인테이크 ("<youtube url>을 역공학하여 <dir>에 저장해")
+사용자가 URL로 지시하면 에이전트 표준 플로우 (`scripts/reverse-url.sh`):
+```bash
+# 단일 영상 또는 플레이리스트를 <output-root>에 역공학 (범위 옵션 전달 가능)
+./scripts/reverse-url.sh "<youtube-url>" ~/rea-movie-artifacts --range 0-120
+./scripts/reverse-url.sh "<playlist-url>" ~/rea-movie-artifacts -- --dub-lang ko
+```
+1. yt-dlp로 720p mp4 + 자막(ko,en)을 `<output-root>/source/`에 다운로드 (플레이리스트면 자동 전체).
+2. 자막 vtt → sibling `.srt` 변환 (decompile이 읽는 형식).
+3. 영상별로 `rea-movie decompile -o <output-root>/h3-projects/<stem>` 실행.
+이후는 에이전트가 최고의 연출 스킬 전문가로 행동: 씬 바이블 검토 → 샷별 연출서 다듬기 (§3) → smoke 검증 → 본편 조립.
+
 ---
 
 ## 3. 부분 샷 연출 수정 루프 (Director's Editing Loop)
 
 에이전트나 인간 감독이 특정 샷의 연출을 다듬고자 할 때의 표준 작업 루프입니다:
 
+### 3-1. 씬 먼저 보기 (Scene-First)
+수십 초 이어지는 대사를 여러 각도로 나눈 장면은 샷 단위가 아니라 **씬 단위**로 다룬다:
+1. `story/scenes/scene_XXXX.json` (씬 바이블) 열기: 장소, 시간대, 인물(S1, S2...) 외모·의상 고정점,
+   공간 배치도, 시선 문법(누가 어느 쪽을 보는가), 대사 흐름.
+   - 씬은 무음 3초+ / 화면 전환(히스토그램 0.55+) / 45초 캡 기준으로 자동 그룹핑됨.
+   - 동일 씬 내 인물 ID는 M3가 전 샷을 통째로 보고 부여하므로 앵글이 바뀌어도 동일 인물로 유지됨.
+2. 바이블이 틀렸으면(인물 바뀜, 장소 오판) JSON을 직접 고친 뒤 해당 샷들에
+   `rea-movie customize apply --proj-dir <proj>` 또는 `./run.sh <shot> --force`로 프롬프트에 재반영.
+   씬 블록(`<!-- rea-movie:scene -->`)은 멱등 교체라 중복 걱정 없음.
+3. 샷 프롬프트(`prompt.ko.md` 선두 `## 0. 씬 컨텍스트`)에 씬 블록이 들어있는지 확인.
+   없으면 `story/scenes/` JSON 유무와 `shot.toml`의 `scene_id`를 점검.
+
+### 3-2. 샷 단위 수정 루프
 1. **스토리보드 및 샷 검토**:
    - `contact_sheet.jpg` (1초 간격 타임스탬프 번인 1xN 스트립 — 사람 리뷰·M3 비전 입력용. H3 렌더 입력이 아님)
    - `shots/shot_0005/refs/first_frame.jpg`, `last_frame.jpg` (H3 `fl2va`의 실제 입력)
