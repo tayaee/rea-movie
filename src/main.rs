@@ -13,6 +13,8 @@ mod scenes;
 mod series_watch;
 // Issue 8: reusable <root>/sources/<source_id>/ cache
 mod sources;
+// Issue 11: multilingual external subtitles + proof outputs
+mod subtitles;
 mod sync_prompt;
 mod timeline;
 
@@ -40,6 +42,7 @@ fn main() -> Result<()> {
                 smoke: args.smoke,
                 offline: args.offline,
                 dub_lang: Some(&args.dub_lang),
+                translate_dub: args.translate_dub,
                 custom_mod: args.custom_mod.as_deref(),
             };
             run_decompile(opts)?;
@@ -69,6 +72,8 @@ fn main() -> Result<()> {
                 proj_dir: &args.proj_dir,
                 smoke: args.smoke,
                 force: args.force,
+                proof: args.proof,
+                offline: args.offline,
             };
             assemble::run_assemble(opts)?;
         }

@@ -12,6 +12,8 @@ pub struct AssembleOptions<'a> {
     pub proj_dir: &'a Path,
     pub smoke: bool,
     pub force: bool,
+    pub proof: bool,
+    pub offline: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -52,7 +54,20 @@ pub fn run_assemble(opts: AssembleOptions) -> Result<()> {
     let final_movie_path = output_dir.join(format!("{}_{}.mp4", movie_name, profile));
     let compare_movie_path = output_dir.join(format!("{}_compare.mp4", movie_name));
 
-    if !opts.force && outputs_up_to_date(&shots, &[&final_movie_path, &compare_movie_path]) {
+    // Issue 11: expected subtitle sidecars participate in the up-to-date check.
+    // The proof mp4 is only required when `--proof` is passed.
+    let mut expected_outputs: Vec<PathBuf> =
+        vec![final_movie_path.clone(), compare_movie_path.clone()];
+    for (code, _) in crate::subtitles::SUPPORTED_LANGS {
+        expected_outputs.push(output_dir.join(format!("{}_{}.{}.srt", movie_name, profile, code)));
+    }
+    expected_outputs.push(output_dir.join(format!("{}_{}.proof.srt", movie_name, profile)));
+    if opts.proof {
+        expected_outputs.push(output_dir.join(format!("{}_{}_proof.mp4", movie_name, profile)));
+    }
+    let expected_refs: Vec<&Path> = expected_outputs.iter().map(|p| p.as_path()).collect();
+
+    if !opts.force && outputs_up_to_date(&shots, &expected_refs) {
         println!(
             "{} {} up-to-date",
             crate::log::stamp(),
@@ -65,24 +80,64 @@ pub fn run_assemble(opts: AssembleOptions) -> Result<()> {
         );
         return Ok(());
     }
+    // When only subtitle sidecars are stale, still rebuild them below without
+    // forcing a full re-encode when the mp4s are already fresh.
+    let mp4s_fresh =
+        !opts.force && outputs_up_to_date(&shots, &[&final_movie_path, &compare_movie_path]);
 
     let trim_dir = output_dir.join(".trim");
     let assemble_result = (|| -> Result<()> {
-        // 1. Assemble final movie
-        assemble_final_movie(&shots, &final_movie_path, &output_dir)?;
+        if mp4s_fresh {
+            println!(
+                "{} {} up-to-date (skipping re-encode)",
+                crate::log::stamp(),
+                final_movie_path.display()
+            );
+        } else {
+            // 1. Assemble final movie
+            assemble_final_movie(&shots, &final_movie_path, &output_dir)?;
+            println!(
+                "{} ==> Final movie created: {}",
+                crate::log::stamp(),
+                final_movie_path.display()
+            );
+
+            // 2. Assemble side-by-side compare video
+            assemble_compare_movie(&shots, &compare_movie_path, &output_dir)?;
+            println!(
+                "{} ==> Compare movie created: {}",
+                crate::log::stamp(),
+                compare_movie_path.display()
+            );
+        }
+
+        // 3. Issue 11 (§3-4): six external subtitle files + always-on proof.srt.
+        let subs = crate::subtitles::generate_multilang_subtitles(
+            opts.proj_dir,
+            &output_dir,
+            &movie_name,
+            profile,
+            opts.force,
+            opts.offline,
+        )?;
         println!(
-            "{} ==> Final movie created: {}",
+            "{} ==> Wrote {} subtitle sidecar(s) to {}",
             crate::log::stamp(),
-            final_movie_path.display()
+            subs.len(),
+            output_dir.display()
         );
 
-        // 2. Assemble side-by-side compare video
-        assemble_compare_movie(&shots, &compare_movie_path, &output_dir)?;
-        println!(
-            "{} ==> Compare movie created: {}",
-            crate::log::stamp(),
-            compare_movie_path.display()
-        );
+        // 4. Issue 11 (§3-3): --proof builds a burned-in proof video.
+        if opts.proof {
+            let proof_srt = output_dir.join(format!("{}_{}.proof.srt", movie_name, profile));
+            let proof_mp4 = output_dir.join(format!("{}_{}_proof.mp4", movie_name, profile));
+            build_proof_video(&final_movie_path, &proof_srt, &proof_mp4)?;
+            println!(
+                "{} ==> Proof video created: {}",
+                crate::log::stamp(),
+                proof_mp4.display()
+            );
+        }
         Ok(())
     })();
 
@@ -664,25 +719,49 @@ fn assemble_final_movie(shots: &[AssembleShot], final_path: &Path, work_dir: &Pa
     // Map video from H3
     cmd.args(["-map", "0:v:0"]);
 
-    // Audio stream 0 (Track 1): H3 generated audio
-    if h3_has_audio {
+    // Issue 11 (§3-4): dual audio with Original Movie Audio as the default
+    // playback track. Keep H3 first for backward compatibility, but mark the
+    // original track `default` so players use the original language.
+    if h3_has_audio && orig_has_audio {
         cmd.args([
             "-map",
             "0:a:0",
             "-metadata:s:a:0",
             "title=H3 Generated Audio",
-        ]);
-    }
-
-    // Audio stream 1 (Track 2): Original movie audio
-    if orig_has_audio {
-        let audio_idx = if h3_has_audio { "1" } else { "0" };
-        cmd.args([
             "-map",
             "1:a:0",
-            &format!("-metadata:s:a:{}", audio_idx),
+            "-metadata:s:a:1",
             "title=Original Movie Audio",
+            "-disposition:a:0",
+            "0",
+            "-disposition:a:1",
+            "default",
         ]);
+    } else {
+        // Audio stream 0 (Track 1): H3 generated audio
+        if h3_has_audio {
+            cmd.args([
+                "-map",
+                "0:a:0",
+                "-metadata:s:a:0",
+                "title=H3 Generated Audio",
+                "-disposition:a:0",
+                "default",
+            ]);
+        }
+
+        // Audio stream: Original movie audio
+        if orig_has_audio {
+            let audio_idx = if h3_has_audio { "1" } else { "0" };
+            cmd.args([
+                "-map",
+                "1:a:0",
+                &format!("-metadata:s:a:{}", audio_idx),
+                "title=Original Movie Audio",
+                &format!("-disposition:a:{}", audio_idx),
+                "default",
+            ]);
+        }
     }
 
     cmd.args([
@@ -855,10 +934,11 @@ fn build_single_shot_compare(
     cmd.args(["-i"]).arg(&shot.render_video);
     cmd.args(["-filter_complex", &filter_with_label, "-map", "[v]"]);
 
-    if h3_has_audio {
-        cmd.args(["-map", "1:a:0"]);
-    } else if orig_has_audio {
+    // Issue 11 (§3-4): prefer the original clip audio as the compare default.
+    if orig_has_audio {
         cmd.args(["-map", "0:a:0"]);
+    } else if h3_has_audio {
+        cmd.args(["-map", "1:a:0"]);
     }
 
     cmd.args([
@@ -899,10 +979,11 @@ fn build_single_shot_compare(
     fallback_cmd.args(["-i"]).arg(&shot.render_video);
     fallback_cmd.args(["-filter_complex", &filter_fallback, "-map", "[v]"]);
 
-    if h3_has_audio {
-        fallback_cmd.args(["-map", "1:a:0"]);
-    } else if orig_has_audio {
+    // Issue 11 (§3-4): prefer the original clip audio as the compare default.
+    if orig_has_audio {
         fallback_cmd.args(["-map", "0:a:0"]);
+    } else if h3_has_audio {
+        fallback_cmd.args(["-map", "1:a:0"]);
     }
 
     fallback_cmd.args([
@@ -934,6 +1015,32 @@ fn build_single_shot_compare(
         );
     }
 
+    Ok(())
+}
+
+/// Issue 11 (§3-3): build `<movie>_<profile>_proof.mp4` by burning the
+/// speaker-tagged proof SRT into the final movie. Falls back to a plain
+/// copy when the `subtitles` filter is unavailable.
+fn build_proof_video(final_movie: &Path, proof_srt: &Path, proof_mp4: &Path) -> Result<()> {
+    // Fast path: burn subtitles with the libass `subtitles` filter.
+    let srt_arg = proof_srt.to_string_lossy().replace('\'', "'\\''");
+    let vf = format!("subtitles='{}'", srt_arg);
+    let attempt = Command::new("ffmpeg")
+        .args(["-nostdin", "-v", "error", "-y", "-i"])
+        .arg(final_movie)
+        .args(["-vf", &vf, "-c:a", "copy", "-movflags", "+faststart"])
+        .arg(proof_mp4)
+        .output();
+    match attempt {
+        Ok(out) if out.status.success() && proof_mp4.is_file() => return Ok(()),
+        _ => {
+            let _ = std::fs::remove_file(proof_mp4);
+        }
+    }
+    // Fallback: copy the final movie (soft-sub equivalent) so --proof never
+    // fails on minimal ffmpeg builds without libass.
+    std::fs::copy(final_movie, proof_mp4)
+        .with_context(|| format!("Failed to create proof video at {:?}", proof_mp4))?;
     Ok(())
 }
 

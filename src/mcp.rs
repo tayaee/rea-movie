@@ -195,6 +195,10 @@ fn get_tool_definitions() -> Vec<Value> {
                     "offline": {
                         "type": "boolean",
                         "description": "Run in offline mode without MiniMax vision API"
+                    },
+                    "translate_dub": {
+                        "type": "boolean",
+                        "description": "Translate original dialogue into dub language (default keeps originals verbatim)"
                     }
                 },
                 "required": ["input"]
@@ -319,6 +323,14 @@ fn get_tool_definitions() -> Vec<Value> {
                     "force": {
                         "type": "boolean",
                         "description": "Rebuild even when outputs are newer than all shot videos"
+                    },
+                    "proof": {
+                        "type": "boolean",
+                        "description": "Also build proof video with burned-in speaker-tagged subtitles"
+                    },
+                    "offline": {
+                        "type": "boolean",
+                        "description": "Skip MiniMax-M3 subtitle translation"
                     }
                 }
             }
@@ -463,6 +475,10 @@ fn execute_tool(name: &str, args: &Value) -> Result<String> {
                 .unwrap_or(false);
             let dub_lang = args.get("dub_lang").and_then(|v| v.as_str());
             let custom_mod = args.get("custom_mod").and_then(|v| v.as_str());
+            let translate_dub = args
+                .get("translate_dub")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
 
             let opts = DecompileOptions {
                 input_path: input,
@@ -475,6 +491,7 @@ fn execute_tool(name: &str, args: &Value) -> Result<String> {
                 smoke,
                 offline,
                 dub_lang,
+                translate_dub,
                 custom_mod,
             };
             decompile::run_decompile(opts)?;
@@ -668,11 +685,18 @@ fn execute_tool(name: &str, args: &Value) -> Result<String> {
             let proj_dir = Path::new(proj_dir_str);
             let smoke = args.get("smoke").and_then(|v| v.as_bool()).unwrap_or(false);
             let force = args.get("force").and_then(|v| v.as_bool()).unwrap_or(false);
+            let proof = args.get("proof").and_then(|v| v.as_bool()).unwrap_or(false);
+            let offline = args
+                .get("offline")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
 
             let opts = AssembleOptions {
                 proj_dir,
                 smoke,
                 force,
+                proof,
+                offline,
             };
             assemble::run_assemble(opts)?;
             Ok("Movie assembly finished successfully".to_string())

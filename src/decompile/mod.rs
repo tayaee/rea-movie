@@ -28,6 +28,7 @@ pub struct DecompileOptions<'a> {
     pub smoke: bool,
     pub offline: bool,
     pub dub_lang: Option<&'a str>,
+    pub translate_dub: bool,
     pub custom_mod: Option<&'a str>,
 }
 
@@ -334,7 +335,10 @@ pub fn run_decompile(opts: DecompileOptions) -> Result<PathBuf> {
         .unwrap_or_default();
     let has_subtitle_track = !subtitle_cues.is_empty();
     let dub_lang = opts.dub_lang.unwrap_or("ko");
-    let want_ko_dub = dub_lang.trim().to_ascii_lowercase().starts_with("ko");
+    // Issue 11 (§3-2): default keeps originals verbatim; only an explicit
+    // --translate-dub opts into the legacy KO dubbing translation path.
+    let translate_dub = opts.translate_dub;
+    let want_ko_dub = translate_dub && dub_lang.trim().to_ascii_lowercase().starts_with("ko");
     let m3_key = std::env::var("MINIMAX_API_KEY")
         .ok()
         .filter(|k| !k.trim().is_empty());
@@ -739,6 +743,7 @@ pub fn run_decompile(opts: DecompileOptions) -> Result<PathBuf> {
             offline: opts.offline,
             force: opts.force,
             dub_lang,
+            translate_dub,
             subtitle_lines: &span_subtitles,
             has_subtitle_track,
             custom_mod: opts.custom_mod,
@@ -816,6 +821,8 @@ pub fn run_decompile(opts: DecompileOptions) -> Result<PathBuf> {
             proj_dir: &proj_dir,
             smoke: opts.smoke,
             force: opts.force,
+            proof: false,
+            offline: opts.offline,
         })?;
     }
 

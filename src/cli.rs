@@ -101,6 +101,11 @@ pub struct DecompileArgs {
     #[arg(long = "dub-lang", visible_alias = "lang", default_value = "ko")]
     pub dub_lang: String,
 
+    /// Translate original dialogue into the dub language (legacy KO dubbing).
+    /// Default keeps subtitle originals verbatim (Issue 11 §3-2).
+    #[arg(long = "translate-dub")]
+    pub translate_dub: bool,
+
     /// Custom visual/character modification applied to all shots (e.g. "주인공에게 KBO 야구모자를 씌워")
     #[arg(long = "mod", visible_alias = "custom-prompt", visible_alias = "style")]
     pub custom_mod: Option<String>,
@@ -169,6 +174,14 @@ pub struct AssembleArgs {
     /// Force rebuild even when outputs are newer than all shot videos
     #[arg(short = 'f', long = "force")]
     pub force: bool,
+
+    /// Also build a proof video with burned-in speaker-tagged subtitles (Issue 11 §3-3)
+    #[arg(long = "proof")]
+    pub proof: bool,
+
+    /// Skip MiniMax-M3 subtitle translation (deterministic fallback only)
+    #[arg(long = "offline")]
+    pub offline: bool,
 }
 
 #[derive(Debug, Args)]

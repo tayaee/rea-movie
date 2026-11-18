@@ -17,6 +17,9 @@ pub struct PromptGenContext<'a> {
     pub offline: bool,
     pub force: bool,
     pub dub_lang: &'a str,
+    /// Issue 11: only translate dialogue when explicitly requested.
+    /// Default (false) keeps the original subtitle text verbatim.
+    pub translate_dub: bool,
     pub subtitle_lines: &'a [String],
     pub has_subtitle_track: bool,
     pub custom_mod: Option<&'a str>,
@@ -216,6 +219,69 @@ fn is_korean_dub(dub_lang: &str) -> bool {
 /// True when the text already contains Hangul (no translation needed).
 pub fn is_korean_text(line: &str) -> bool {
     line.chars().any(|c| ('\u{AC00}'..='\u{D7A3}').contains(&c))
+}
+
+/// Issue 11 (§3-2): map a dub_lang hint to a display language name.
+/// Used as a fallback when the dialogue text itself carries no script signal.
+pub fn dub_lang_to_language(dub_lang_hint: &str) -> &'static str {
+    match dub_lang_hint.trim().to_ascii_lowercase().as_str() {
+        "ko" | "kor" | "korean" | "kr" => "Korean",
+        "ja" | "jpn" | "japanese" | "jp" => "Japanese",
+        "zh" | "chi" | "chinese" | "cn" => "Chinese",
+        "fr" | "fra" | "french" => "French",
+        "de" | "ger" | "german" => "German",
+        _ => "English",
+    }
+}
+
+/// Issue 11 (§3-2): detect the actual language of a dialogue line so the
+/// `<d>[Language] ...</d>` tag always matches the body text.
+///
+/// Priority:
+/// 1. Hangul (AC00..=D7A3, Jamo 1100..=11FF, Compat 3130..=318F) -> Korean
+/// 2. Hiragana/Katakana (3040..=30FF) -> Japanese
+/// 3. CJK Unified Ideographs (4E00..=9FFF) -> Chinese
+/// 4. German-specific `ß`, or `ä/ö/ü` -> German
+/// 5. French-specific accents (`é/è/ê/ë/à/â/ç/î/ï/ô/œ/ù/û/ÿ/æ`) -> French
+/// 6. Latin letters -> English
+/// 7. Otherwise fall back to `dub_lang_hint`.
+pub fn detect_dialogue_language(text: &str, dub_lang_hint: &str) -> &'static str {
+    let mut has_latin = false;
+    let mut has_french_mark = false;
+    let mut has_german_umlaut = false;
+    let mut has_sharp_s = false;
+    for c in text.chars() {
+        if ('\u{AC00}'..='\u{D7A3}').contains(&c)
+            || ('\u{1100}'..='\u{11FF}').contains(&c)
+            || ('\u{3130}'..='\u{318F}').contains(&c)
+        {
+            return "Korean";
+        }
+        if ('\u{3040}'..='\u{30FF}').contains(&c) {
+            return "Japanese";
+        }
+        if ('\u{4E00}'..='\u{9FFF}').contains(&c) {
+            return "Chinese";
+        }
+        match c {
+            'ß' => has_sharp_s = true,
+            'ä' | 'Ä' | 'ö' | 'Ö' | 'ü' | 'Ü' => has_german_umlaut = true,
+            'é' | 'è' | 'ê' | 'ë' | 'à' | 'â' | 'ç' | 'î' | 'ï' | 'ô' | 'œ' | 'Œ' | 'ù' | 'û'
+            | 'ÿ' | 'æ' | 'Æ' => has_french_mark = true,
+            'A'..='Z' | 'a'..='z' => has_latin = true,
+            _ => {}
+        }
+    }
+    if has_sharp_s || has_german_umlaut {
+        return "German";
+    }
+    if has_french_mark {
+        return "French";
+    }
+    if has_latin {
+        return "English";
+    }
+    dub_lang_to_language(dub_lang_hint)
 }
 
 /// Batch-translate subtitle lines to natural conversational Korean via
@@ -545,17 +611,19 @@ pub fn infer_delivery_mode(
 
 fn build_dialogue_lines(ctx: &PromptGenContext) -> (String, String) {
     let want_ko = is_korean_dub(ctx.dub_lang);
-    let lang_tag = if want_ko { "Korean" } else { "English" };
 
     if ctx.has_subtitle_track {
         if ctx.subtitle_lines.is_empty() {
-            // Silent shot in a movie that has subtitles
+            // Silent shot in a movie that has subtitles.
+            // Issue 11 (§3-2): identical instruction regardless of dub_lang.
             let ko_line = "- 대사 없음 (인물 표정 연기 및 현장 환경음 중심)".to_string();
             let h3_line = "No spoken dialogue in this shot; characters remain silent with natural ambient sound.".to_string();
             return (ko_line, h3_line);
         }
 
-        let joined_dialogue = if want_ko {
+        // Issue 11 (§3-2): default keeps the original subtitle verbatim.
+        // Only `--translate-dub` opts into the legacy KO dubbing translation.
+        let joined_dialogue = if ctx.translate_dub && want_ko {
             ctx.subtitle_lines
                 .iter()
                 .map(|l| translate_line_to_korean(l))
@@ -564,6 +632,8 @@ fn build_dialogue_lines(ctx: &PromptGenContext) -> (String, String) {
         } else {
             ctx.subtitle_lines.join(" ")
         };
+        // `<d>[Language] ...</d>` must match the actual body language.
+        let lang_tag = detect_dialogue_language(&joined_dialogue, ctx.dub_lang);
 
         // Issue 10: off-screen / reaction delivery never lip-syncs the on-screen subject.
         let mode = infer_delivery_mode(
@@ -1478,6 +1548,7 @@ Let's emit JSON:
             offline: true,
             force: false,
             dub_lang: "ko",
+            translate_dub: false,
             subtitle_lines,
             has_subtitle_track: true,
             custom_mod: None,
@@ -1540,5 +1611,37 @@ Let's emit JSON:
         assert!(h3_2.contains("synchronized lip movement"), "h3: {h3_2}");
         assert!(!h3_2.contains("no lip movement"));
         assert!(!ko2.contains("화면 밖"));
+    }
+
+    #[test]
+    fn test_detect_dialogue_language_script_priority() {
+        assert_eq!(detect_dialogue_language("안녕하세요.", "en"), "Korean");
+        assert_eq!(detect_dialogue_language("こんにちは。", "en"), "Japanese");
+        assert_eq!(detect_dialogue_language("你好，世界。", "en"), "Chinese");
+        assert_eq!(detect_dialogue_language("Hello world", "ko"), "English");
+        assert_eq!(detect_dialogue_language("Café au lait", "en"), "French");
+        assert_eq!(detect_dialogue_language("Grüße aus Berlin", "en"), "German");
+        assert_eq!(detect_dialogue_language("Straße", "en"), "German");
+        // No script signal -> dub_lang hint fallback.
+        assert_eq!(detect_dialogue_language("123 ...", "ko"), "Korean");
+        assert_eq!(detect_dialogue_language("123 ...", "fr"), "French");
+        assert_eq!(detect_dialogue_language("", "de"), "German");
+    }
+
+    #[test]
+    fn test_build_dialogue_keeps_original_and_matches_lang_tag() {
+        let on = vec!["S1".to_string()];
+        // English original stays English even with default ko dub_lang.
+        let lines = vec!["Hello world".to_string()];
+        let ctx = test_ctx(&lines, "S1", &on, "");
+        let (ko, h3) = build_dialogue_lines(&ctx);
+        assert!(ko.contains("<d>[English] Hello world</d>"), "ko: {ko}");
+        assert!(h3.contains("<d>[English] Hello world</d>"), "h3: {h3}");
+        // Korean original stays Korean.
+        let lines_ko = vec!["안녕하세요.".to_string()];
+        let ctx_ko = test_ctx(&lines_ko, "S1", &on, "");
+        let (ko2, h3_ko) = build_dialogue_lines(&ctx_ko);
+        assert!(ko2.contains("<d>[Korean] 안녕하세요.</d>"), "ko: {ko2}");
+        assert!(h3_ko.contains("<d>[Korean] 안녕하세요.</d>"), "h3: {h3_ko}");
     }
 }
