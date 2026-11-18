@@ -11,19 +11,28 @@ description: Reverse-engineer any movie into reproducible MiniMax-H3 multi-shot 
 
 ## 1. 프로젝트 핵심 아키텍처 및 철학
 
-- **목표**: 임의의 영화/영상(`mp4`, `mkv`)을 입력받아 샷 분할, 앵커 프레임(`first_frame.jpg`, `last_frame.jpg`), 타임코드 번인 스토리보드(`contact_sheet.jpg`), 한국어 연출서(`prompt.ko.md`), MiniMax-H3 영문 프롬프트(`prompt.h3.txt`)를 생성하고, DGX Spark 서버 풀에서 각 샷을 렌더링한 후 최종 영화 및 좌우 1:1 동시 비교 영상(`_compare.mp4`)으로 조립한다.
+- **목표**: 임의의 영화/영상(`mp4`, `mkv`)을 입력받아 샷 분할, 앵커 프레임(`first_frame.jpg`, `last_frame.jpg`), 타임스탬프 번인 스토리보드(`contact_sheet.jpg`), 한국어 연출서(`prompt.ko.md`), MiniMax-H3 영문 프롬프트(`prompt.h3.txt`)를 생성하고, DGX Spark 서버 풀에서 각 샷을 렌더링한 후 최종 영화 및 좌우 1:1 동시 비교 영상(`_compare.mp4`)으로 조립한다.
 - **핵심 엔지니어링 원칙**:
   1. **최대 샷 길이 8.0초 이하**: DGX Spark 128GB 통합 메모리 OOM 방지 및 생성 일관성 유지.
   2. **모핑 방지**: 2개의 다른 카메라 앵글/컷을 하나의 `fl2va` 샷으로 묶지 않음.
   3. **Prod vs Smoke 완전 격리**:
      - Prod 기본: `960x576`, `steps=50`, `fps=24` → `shots/shot_XXXX/renders/prod/`, `outputs/prod/`
      - Smoke 모드: `608x352`, `steps=10`, `fps=24` → `shots/shot_XXXX/renders/smoke/`, `outputs/smoke/`
+     - 해상도는 32 배수(VAE 타일·패치 패러렐 요구)이어야 함. `640x360` 불가 → `608x352` 사용.
   4. **Skip-by-default & Take History 백업**:
      - 타겟 파일이 이미 존재하면 기본적으로 건너뜀(Skip).
      - `--force` 옵션으로 재생성 시 이전 결과물은 `history/take_NNN.mp4`로 안전하게 백업.
   5. **듀얼 오디오 트랙 및 1:1 비교 영상**:
      - 최종 본편(`outputs/<profile>/<movie_name>_<profile>.mp4`): Track 1(H3 오디오) + Track 2(원본 영화 오디오).
      - 비교 영상(`outputs/<profile>/<movie_name>_compare.mp4`): [좌: 원본 | 우: H3 렌더본 + `Shot #XXXX` 라벨].
+
+## 1-2. 출력 디렉토리 구조 (필수 숙지)
+
+- 역공학 프로젝트(가벼움, git 추적): `~/rea-movie-artifacts/h3-projects/<name>/`
+- 렌더 결과물(무거움, git 제외): `~/rea-movie-artifacts/h3-results/<name>/` (형제 `../h3-results/` 자동 매핑)
+- 풀 워크스페이스(`serve-h3.sh`, node-state): `~/rea-movie-artifacts`
+- 세 호스트(wsl2, spark1, spark2)의 `~/rea-movie-artifacts`는 모두 `/rosenas/data/rea-movie-artifacts` 심볼릭 링크.
+- 구 레이아웃(`rea-movie-projects/` → `rea-movie-workspace/`)은 마이그레이션 폴백으로만 인식됨. 신규 작업에 사용 금지.
 
 ---
 
@@ -32,13 +41,18 @@ description: Reverse-engineer any movie into reproducible MiniMax-H3 multi-shot 
 ### A. 영화 역공학 (Decompile)
 입력 영상을 분석하여 샷별 에셋 및 프롬프트 프로젝트를 생성합니다:
 ```bash
-# 기본 역공학 (MiniMax-M3 비전 API로 한국어 연출서 자동 작성)
-rea-movie robocop.mp4 -o ./robocop_proj
+# 기본 역공학: -o 생략 시 ~/rea-movie-artifacts/h3-projects/<파일명>/ 에 생성
+# + MiniMax-M3 비전 API로 한국어 연출서 자동 작성 (MINIMAX_API_KEY 필요)
+rea-movie robocop.mp4 --range 00:01:10-00:02:30
 
-# 특정 구간만 역공학 (예: 1분 10초 ~ 2분 30초)
-rea-movie robocop.mp4 -o ./robocop_proj --range 00:01:10-00:02:30
+# 자막 파일은 입력 영상과 동명 sibling .srt여야 함 (예: robocop.en.srt, .ko.srt, .diarized.srt)
+# 자막 큐는 시작점이 속한 샷 하나에만 정확히-한-번 할당됨 (마이크로샷 반복 방지)
 
-# 오프라인/테스트 모드 (비전 API 호출 없이 플레이스홀더 프롬프트 생성)
+# 더빙 언어 (기본값 ko; H3가 말하는 언어. 원본 유지가 목적이면 ko)
+rea-movie robocop.mp4 -o ./robocop_proj --dub-lang ko   # 기본값이라 생략 가능
+rea-movie robocop.mp4 -o ./robocop_proj --dub-lang en   # 영어 더빙이 필요할 때만
+
+# 오프라인/테스트 모드 (비전 API 호출 없이 템플릿 프롬프트 생성; 번역도 테이블 폴백)
 rea-movie robocop.mp4 -o ./robocop_proj --offline
 
 # 역공학 완료 후 즉시 렌더 및 조립까지 자동 실행
@@ -48,12 +62,13 @@ rea-movie robocop.mp4 -o ./robocop_proj --run
 ### B. 단일 진입점 스크립트 (`./run.sh`)
 생성된 프로젝트 루트 디렉토리에서 `./run.sh`를 통해 렌더링과 조립을 원스톱으로 수행합니다:
 ```bash
-cd ./robocop_proj
+cd ~/rea-movie-artifacts/h3-projects/robocop_proj
+REA_MOVIE_BIN=/path/to/rea-movie ./run.sh --smoke   # 바이너리 위치 명시 권장
 
 # 1. Prod 기본 렌더링 및 조립 (960x576, 50 steps)
 ./run.sh
 
-# 2. Smoke 고속 렌더링 및 조립 (608x352, 10 steps)
+# 2. Smoke 고속 렌더링 및 조립 (608x352, 10 steps) — 먼저 여기로 검증
 ./run.sh --smoke
 
 # 3. 특정 단일 샷 재생성 (--force로 이전 파일 백업 후 재렌더링)
@@ -83,9 +98,9 @@ rea-movie assemble --smoke
 에이전트나 인간 감독이 특정 샷의 연출을 다듬고자 할 때의 표준 작업 루프입니다:
 
 1. **스토리보드 및 샷 검토**:
-   - `contact_sheet.jpg` (타임스탬프 번인 4x4 시트)
-   - `shots/shot_0005/refs/first_frame.jpg`, `last_frame.jpg`
-   - `shots/shot_0005/shot.toml` (앵커 모드: `first_and_last`, `first_frame`, `ref_only`, `text_only` 등)
+   - `contact_sheet.jpg` (1초 간격 타임스탬프 번인 1xN 스트립 — 사람 리뷰·M3 비전 입력용. H3 렌더 입력이 아님)
+   - `shots/shot_0005/refs/first_frame.jpg`, `last_frame.jpg` (H3 `fl2va`의 실제 입력)
+   - `shots/shot_0005/shot.toml` (앵커 모드: `first_and_last`, `first_only`, `ref_only`, `none`)
 2. **한국어 연출 지시서 편집**:
    `shots/shot_0005/prompt.ko.md` 파일을 열고 카메라 워크, 피사체 감정선, 조명, 사운드 연출을 수정합니다.
 3. **프롬프트 재컴파일 및 렌더링**:
@@ -94,23 +109,30 @@ rea-movie assemble --smoke
    ./run.sh 0005 --force
    ```
 4. **결과 비교 및 확인**:
-   - `outputs/prod/<movie_name>_compare.mp4`를 재생하여 원본과의 싱크 및 연출 뉘앙스를 확인합니다.
+   - `outputs/smoke/<movie_name>_compare.mp4`를 재생하여 원본과의 싱크 및 연출 뉘앙스를 확인합니다.
+   - 지시→결과 학습용 4점 세트: `prompt.ko.md` + `prompt.h3.txt` + `renders/smoke/*.mp4` + `refs/first_frame.jpg`.
+
+### 앵커별 H3 요청 형태 (디버깅용)
+최저 레벨 호출은 `POST {endpoint}/v1/videos/sync` (multipart)이며 앵커에 따라 달라집니다:
+- `first_and_last` → `task=fl2va`, `frame_indices=[0,-1]`, 파트 `input_references` × 2 (first/last)
+- `first_only` → `task=fl2va`, `frame_indices=[0]`, 파트 `input_reference` × 1 (단수 주의)
+- `ref_only` → `task=ref2va`, `frame_indices` 없음, `face.jpg` + `voice.wav` (현재 1인분만 전송, 다중인물 미지원)
+- `none` → `task=t2va`, 이미지 없음, `aspect_ratio=16:9` 추가 (일관성 가장 낮음)
 
 ---
 
 ## 4. DGX Spark 서버 풀 관리 (`rea-movie pool`)
 
-MiniMax-H3 모델 서빙 파티션(`fl2va` 기본, `ref2va`)을 제어합니다:
 ```bash
 # 서버 풀 노드 상태 및 엔드포인트 포트 조회
 rea-movie pool status
 
-# 서버 풀 배포용 systemd 런처 스크립트 생성
+# 서버 풀 배포용 런처 스크립트 생성 (~/rea-movie-artifacts 기준)
 rea-movie pool generate-scripts
-
-# 엔진 모드 전환 요청 (fl2va <-> ref2va)
-rea-movie pool switch --engine ref2va
 ```
+- 노드당 1작업으로 고정할 것: `REA_MOVIE_H3_ENDPOINT=http://spark1.local:8000 ./run.sh --smoke`
+- 3작업을 2노드에 올리면 경합 → 504/행 발생 실측. 노드당 1개가 안정적.
+- 주의: `pool switch` 서브커맨드는 존재하지 않음. 엔진 재시작이 필요하면 §7 참조.
 
 ---
 
@@ -135,3 +157,32 @@ rea-movie pool switch --engine ref2va
 - **ffprobe/ffmpeg 경로 문제**: `assemble` 시 절대 경로(`canonicalize`)를 사용하여 상대 경로 concat 오류를 방지합니다.
 - **폰트 미설치 환경 폴백**: `Shot #XXXX` 라벨 오버레이 시 시스템 폰트가 없거나 `drawtext` 필터 에러가 나면 자동으로 라벨 없는 `hstack` 필터로 안전하게 폴백합니다.
 - **오디오 트랙 전환**: VLC, IINA, QuickTime 등 미디어 플레이어에서 오디오 트랙 1(H3)과 트랙 2(Original)를 전환하며 사운드 싱크를 검증할 수 있습니다.
+- **대사 반복 증상**: 조립본에서 같은 대사가 반복되면 decompile이 overlap 매칭 버전인지 확인. 현행은 정확히-한-번 할당(`assign_cues_to_spans`) + 회귀테스트 존재.
+- **무음샷 `<d>[English]` 태그**: 무음샷 h3 대사가 영어 하드코딩인 기지가 있음. 한국어 dub 프로젝트에서 발견 시 수정 대상.
+- **M3 환각**: 연출서에 원본에 없는 요소(자막 문구 등)가 묘사될 수 있음. compare 영상으로 대조 검증.
+
+---
+
+## 7. H3/M3 장애 운영 런북 (실측 기반)
+
+### 소요 시간 기준 (smoke, 608x352, 10 steps)
+- decompile 온라인(M3 연출서+번역): 샷당 약 2분
+- H3 렌더: 샷당 약 2~7분 (2분짜리 60샷 ≈ 3~4시간/노드)
+- 계획 수립 시 위 기준으로 ETA 산정할 것.
+
+### H3 서버 행(hang) 판별과 복구
+- 증상: `/health` 200이지만 렌더 요청이 15분+ 무응답. `nvidia-smi` GPU 사용률 0%면 워커 wedged 확정.
+- 진행 중 작업이 없을 때만: `ssh sparkX.local 'docker restart h3-fl2va'` (동일 설정 재시작, 안전).
+- 재시작 후 모델 리로드에 10~15분 소요. `/health` 200 복귀 후 단발샷 프로브(`render --shot 0019 --smoke`)로 확인하고 본 작업 재개.
+- 주의: 행 요청의 클라이언트를 kill해도 서버 측 작업이 남아 있을 수 있음. 동일 노드 재투입 전 프로브 필수.
+- 서버 측 7200초 타임아웃(504 Gateway Timeout)도 관측됨. 3중첩 경합이 유발하므로 노드당 1작업 원칙 준수.
+
+### M3 API 과부하 (529) 대응
+- 코드에 재시도 내장: per-shot 연출 3회, per-shot 번역 3회(600s 타임아웃, 30줄 청크).
+- 클러스터 전체 529가 1시간+ 지속된 실측 있음. 그 경우 온라인 decompile 강행 시 템플릿 폴백 양산 → 대기 후 재개가 정답.
+- 회복 판별: `POST /v1/chat/completions`에 `"Reply with exactly: OK"` probe.
+
+### 중지/재개 절차
+- 중지: `pkill -f '[r]un\.sh --smoke'` 후 `pkill -f '[r]ea-movie render'` (대괄호 트릭: pkill 자기매칭 방지). 잔여 프로세스 `ps`로 확인.
+- 재개: 완료 샷은 Skip-by-default로 자동 스킵되므로 `./run.sh --smoke` 재실행만으로 이어짐. 손실은 진행 중이던 1샷뿐.
+- 부분 실패 프로젝트(v2 등) 재생성 시: 중단된 decompile의 잔재 디렉토리는 직접 삭제 후 재실행 (bases 보존 로직 때문에 `--force`로도 프롬프트가 재생성되지 않음).
