@@ -30,6 +30,32 @@ pub struct DecompileOptions<'a> {
     pub custom_mod: Option<&'a str>,
 }
 
+/// Series root for `<root>/h3-projects/<name>` layouts: the grandparent dir.
+/// Series-level artifacts (world bible etc.) live at `<root>/story/`.
+pub fn series_root_for(proj_dir: &Path) -> Option<PathBuf> {
+    let resolved = std::fs::canonicalize(proj_dir).unwrap_or_else(|_| proj_dir.to_path_buf());
+    let parent = resolved.parent()?;
+    if parent.file_name().and_then(|n| n.to_str()) != Some("h3-projects") {
+        return None;
+    }
+    parent.parent().map(|p| p.to_path_buf())
+}
+
+/// Warn when a project has no series context (`<root>/story/world.json`).
+/// Non-blocking: partial reverse-engineering proceeds with locally scoped IDs.
+pub fn check_series_context(proj_dir: &Path) {
+    let has_context = series_root_for(proj_dir)
+        .map(|root| root.join("story").join("world.json"))
+        .map(|p| p.is_file())
+        .unwrap_or(false);
+    if !has_context {
+        eprintln!(
+            "{} Warning: no series context (<root>/story/world.json). Proceeding with locally scoped IDs; cross-episode consistency is NOT guaranteed. Ask the user for the full series first (skill section 3-0).",
+            crate::log::stamp()
+        );
+    }
+}
+
 pub fn run_decompile(opts: DecompileOptions) -> Result<PathBuf> {
     let input_path = opts.input_path;
     let input_meta = std::fs::metadata(input_path).with_context(|| {
@@ -69,6 +95,13 @@ pub fn run_decompile(opts: DecompileOptions) -> Result<PathBuf> {
 
     std::fs::create_dir_all(&proj_dir)
         .with_context(|| format!("Failed to create project directory at {:?}", proj_dir))?;
+
+    // Series-first default: a project under <root>/h3-projects/<name> is expected
+    // to have series context at <root>/story/{world,characters}.json (see skill §3-0).
+    // Without it, IDs stay locally scoped and cross-episode consistency is
+    // not guaranteed. Warn and proceed; the agent asks the user for the full
+    // series first and only continues partial on explicit confirmation.
+    check_series_context(&proj_dir);
 
     let media_dir = crate::config::resolve_media_root(&proj_dir);
     std::fs::create_dir_all(&media_dir).with_context(|| {
@@ -580,4 +613,25 @@ pub fn run_decompile(opts: DecompileOptions) -> Result<PathBuf> {
     }
 
     Ok(proj_dir)
+}
+
+#[cfg(test)]
+mod series_tests {
+    use super::*;
+
+    #[test]
+    fn test_series_root_for_h3_projects_layout() {
+        // Canonical layout resolves to the artifacts root.
+        let dir = std::env::temp_dir().join("rea-movie-series-test");
+        let proj = dir.join("h3-projects").join("some_proj");
+        std::fs::create_dir_all(&proj).unwrap();
+        let root = series_root_for(&proj).unwrap();
+        assert_eq!(root, dir);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_series_root_none_for_standalone() {
+        assert!(series_root_for(Path::new("/tmp/standalone_proj")).is_none());
+    }
 }
