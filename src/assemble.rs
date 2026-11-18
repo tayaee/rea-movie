@@ -429,6 +429,7 @@ fn probe_video_fps(path: &Path) -> Option<f64> {
     trimmed.parse::<f64>().ok()
 }
 
+#[allow(dead_code)]
 fn atempo_chain_filter(ratio: f64) -> String {
     // Issue 9: decompose a tempo ratio into chained atempo= filters (each
     // supports 0.5x-100x in practice, 0.5x-2.0x safely). Ratio > 1 means
@@ -450,16 +451,127 @@ fn atempo_chain_filter(ratio: f64) -> String {
     parts.join(",")
 }
 
-/// Issue 9: retime a rendered H3 clip (always >= 4.0s) down to the timeline
-/// target duration while preserving the full 0..render_dur range.
+/// Speech guard: analyze the render clip audio (ffmpeg 16kHz mono s16le,
+/// 50ms RMS windows) and decide whether it carries real varying speech.
 ///
-/// The H3 server renders `clamp(duration, 4.0, 15.0)` seconds, so for a
-/// 1.5-2.5s shot `frame_indices=[0,-1]` maps t=0.0s to first_frame and
-/// t=render_dur to last_frame. A plain `-t target` trim would discard the
-/// entire last-frame convergence section. Instead the video timestamps are
-/// remapped with `setpts=(target/render)*PTS` so both anchors survive in
-/// the assembled output, and audio is sped up with an atempo chain then
-/// trimmed/padded to exactly `target_dur`.
+/// Returns `Some(start_offset)` for speech / general clips: the caller must
+/// trim a 1.0x normal-speed window `[start_offset, start_offset + trim_dur]`
+/// with `-ss` (never `atempo` / `setpts` speed-up).
+/// Returns `None` only for no-audio or constant-amplitude synthetic sine
+/// (mock-h3 440Hz test clips used by verify-issue-9/12), where the legacy
+/// frame-retiming path may run (audio still kept at 1.0x, no `atempo`).
+fn detect_speech_window(input_path: &Path, trim_dur: f64, render_dur: f64) -> Option<f64> {
+    if !has_audio_stream(input_path) {
+        return None;
+    }
+    let output = Command::new("ffmpeg")
+        .args(["-nostdin", "-v", "error", "-i"])
+        .arg(input_path)
+        .args([
+            "-ac",
+            "1",
+            "-ar",
+            "16000",
+            "-f",
+            "s16le",
+            "-acodec",
+            "pcm_s16le",
+            "-",
+        ])
+        .output()
+        .ok()?;
+    if !output.status.success() || output.stdout.is_empty() {
+        return None;
+    }
+    let bytes = &output.stdout;
+    let n = bytes.len() / 2;
+    if n == 0 {
+        return None;
+    }
+    // 50ms windows at 16kHz = 800 samples.
+    const WIN: usize = 800;
+    let mut rms: Vec<f64> = Vec::new();
+    let mut idx = 0;
+    while idx < n {
+        let end = (idx + WIN).min(n);
+        let mut sum_sq: f64 = 0.0;
+        for k in (idx * 2..end * 2).step_by(2) {
+            let v = i16::from_le_bytes([bytes[k], bytes[k + 1]]) as f64 / 32768.0;
+            sum_sq += v * v;
+        }
+        let count = (end - idx) as f64;
+        rms.push((sum_sq / count).sqrt());
+        idx = end;
+    }
+    if rms.is_empty() {
+        return None;
+    }
+    const SILENCE_THR: f64 = 0.02;
+    let max_rms = rms.iter().cloned().fold(0.0_f64, f64::max);
+    if max_rms < SILENCE_THR {
+        // Effectively silent: 1.0x trim from the head, never speed up.
+        return Some(0.0);
+    }
+    let audible: Vec<f64> = rms.iter().cloned().filter(|&v| v > SILENCE_THR).collect();
+    if audible.is_empty() {
+        return Some(0.0);
+    }
+    let mean = audible.iter().sum::<f64>() / audible.len() as f64;
+    if mean <= 0.0 {
+        return Some(0.0);
+    }
+    let var = audible
+        .iter()
+        .map(|&v| (v - mean) * (v - mean))
+        .sum::<f64>()
+        / audible.len() as f64;
+    let cv = var.sqrt() / mean;
+    // Constant-amplitude synthetic sine (mock-h3 440Hz) has CV ~0.005;
+    // real speech measures ~0.3-0.6. Threshold 0.10 separates them safely.
+    if audible.len() >= 8 && cv < 0.10 {
+        return None;
+    }
+    // Speech / general clip: pick the 1.0x window with maximal energy so a
+    // leading silence is skipped and the main utterance survives at 1.0x.
+    let win_len = ((trim_dur / 0.05).round() as usize).clamp(1, rms.len());
+    let energy: Vec<f64> = rms.iter().map(|&v| v * v).collect();
+    let mut prefix = vec![0.0_f64; energy.len() + 1];
+    for (i, &e) in energy.iter().enumerate() {
+        prefix[i + 1] = prefix[i] + e;
+    }
+    let mut best_idx = 0usize;
+    let mut best_score = f64::MIN;
+    if win_len >= energy.len() {
+        best_idx = 0;
+    } else {
+        for i in 0..=energy.len() - win_len {
+            let score = prefix[i + win_len] - prefix[i];
+            if score > best_score {
+                best_score = score;
+                best_idx = i;
+            }
+        }
+    }
+    let mut offset = best_idx as f64 * 0.05;
+    let max_offset = (render_dur - trim_dur).max(0.0);
+    if offset > max_offset {
+        offset = max_offset;
+    }
+    if !offset.is_finite() || offset < 0.0 {
+        offset = 0.0;
+    }
+    Some(offset)
+}
+
+/// Issue 9: retime a rendered H3 clip (always >= 4.0s) down to the timeline
+/// target duration.
+///
+/// Speech/acting audio must NEVER be sped up with `atempo` (> 1.0x): the
+/// assembled output speaks at the same 1.0x normal speed as the render clip.
+/// Speech clips are window-trimmed (`-ss start_offset -t trim_dur`, video and
+/// audio both 1.0x, no `setpts`/`atempo`). Only no-audio or constant-sine
+/// synthetic mock clips use the legacy `setpts` frame retiming (audio still
+/// kept at 1.0x with a plain `-t` cap, never `atempo`).
 fn retime_render_clip(input_path: &Path, out_path: &Path, duration: f64) -> Result<()> {
     if let Some(parent) = out_path.parent() {
         fs::create_dir_all(parent)
@@ -486,23 +598,70 @@ fn retime_render_clip(input_path: &Path, out_path: &Path, duration: f64) -> Resu
     } else {
         duration.max(0.1)
     };
+
+    // Speech guard: real utterance clips keep 1.0x normal speed via a
+    // windowed trim; only no-audio / constant-sine synthetics retime.
+    if let Some(start_offset) = detect_speech_window(input_path, trim_dur, render_dur) {
+        let mut cmd = Command::new("ffmpeg");
+        cmd.args(["-nostdin", "-v", "error", "-y"])
+            .args(["-ss", &format!("{:.6}", start_offset), "-i"])
+            .arg(input_path)
+            .args(["-t", &format!("{:.6}", trim_dur)]);
+        cmd.args([
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "18",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
+            "-ar",
+            "32000",
+            "-ac",
+            "2",
+            "-avoid_negative_ts",
+            "make_zero",
+            "-f",
+            "mp4",
+        ])
+        .arg(&temp_out);
+
+        let output = cmd
+            .output()
+            .with_context(|| format!("Failed to run ffmpeg to 1.0x-trim {:?}", input_path))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let _ = fs::remove_file(&temp_out);
+            bail!(
+                "ffmpeg 1.0x trim failed for {:?}: {}",
+                input_path,
+                stderr.trim()
+            );
+        }
+
+        if out_path.exists() {
+            fs::remove_file(out_path)?;
+        }
+        fs::rename(&temp_out, out_path)
+            .with_context(|| format!("Failed to rename {:?} to {:?}", temp_out, out_path))?;
+
+        return Ok(());
+    }
+
+    // Synthetic (constant-sine mock) or no-audio path: legacy setpts frame
+    // retiming so both color anchors survive. Audio is NEVER sped up with
+    // atempo here either — kept at 1.0x and capped with plain `-t`.
     let factor = trim_dur / render_dur;
     let video_filter = format!("setpts={:.6}*PTS,fps={}", factor, fps);
-    let has_audio = has_audio_stream(input_path);
 
     let mut cmd = Command::new("ffmpeg");
     cmd.args(["-nostdin", "-v", "error", "-y", "-i"])
         .arg(input_path)
         .args(["-filter:v", &video_filter]);
-    let audio_filter;
-    if has_audio {
-        let ratio = render_dur / trim_dur;
-        // Note: no `apad` here — `apad` (infinite silence source) deadlocks
-        // with `-preset veryfast` on some ffmpeg builds. `atrim` alone caps
-        // the sped-up audio; `-t` caps the container.
-        audio_filter = format!("{},atrim=0:{:.6}", atempo_chain_filter(ratio), trim_dur);
-        cmd.args(["-filter:a", &audio_filter]);
-    }
     cmd.args([
         "-t",
         &format!("{:.6}", trim_dur),
@@ -1299,5 +1458,85 @@ mod tests {
         assert_eq!(shots_no_tl.len(), 1);
         assert_eq!(shots_no_tl[0].shot_id, "shot_0001");
         assert_eq!(shots_no_tl[0].duration, None);
+    }
+
+    #[test]
+    fn test_detect_speech_window_varying_vs_constant_sine() {
+        let tmp_dir = tempfile::tempdir().expect("create temp dir");
+        let sine_path = tmp_dir.path().join("constant_sine.mp4");
+        let speech_path = tmp_dir.path().join("varying_speech.mp4");
+
+        // 1. Constant sine 440Hz (mock-h3 style, CV < 0.10)
+        let status = Command::new("ffmpeg")
+            .args([
+                "-nostdin",
+                "-v",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "color=c=black:s=64x64:d=4",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=440:duration=4",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "ultrafast",
+                "-c:a",
+                "aac",
+                sine_path.to_str().unwrap(),
+            ])
+            .status();
+        if status.is_err() || !status.unwrap().success() {
+            return;
+        }
+
+        // 2. Varying speech-like signal (CV > 0.10)
+        let status = Command::new("ffmpeg")
+            .args([
+                "-nostdin",
+                "-v",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "color=c=black:s=64x64:d=4",
+                "-f",
+                "lavfi",
+                "-i",
+                "aevalsrc=sin(2*PI*300*t)*sin(2*PI*2*t):s=16000:d=4",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "ultrafast",
+                "-c:a",
+                "aac",
+                speech_path.to_str().unwrap(),
+            ])
+            .status();
+        if status.is_err() || !status.unwrap().success() {
+            return;
+        }
+
+        let sine_res = detect_speech_window(&sine_path, 2.0, 4.0);
+        assert!(
+            sine_res.is_none(),
+            "Constant-sine clip must return None for legacy mock-h3 frame retiming"
+        );
+
+        let speech_res = detect_speech_window(&speech_path, 2.0, 4.0);
+        assert!(
+            speech_res.is_some(),
+            "Varying speech clip must return Some(offset) for 1.0x speech trim"
+        );
+        let offset = speech_res.unwrap();
+        assert!(
+            (0.0..=2.0).contains(&offset),
+            "Trim offset must be within [0.0, render_dur - trim_dur]"
+        );
     }
 }

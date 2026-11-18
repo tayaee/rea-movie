@@ -139,6 +139,9 @@ pub fn extract_shot_references(
 
     // 4/5. Anchor frames: first (+2 frames or min(duration*0.1, 0.08)s) and
     // last (-2 frames). Cached by absolute timestamp under keyframes/.
+    // ffmpeg 8 + container-duration > video-duration edge: last_time can land
+    // past the video stream (audio extends further). Try t, then earlier
+    // fallbacks so one boundary frame never fails the whole decompile.
     let offset = 0.08_f64.min(duration * 0.1);
     let first_time = start_sec + offset;
     let last_time = (end_sec - offset).max(start_sec);
@@ -148,22 +151,35 @@ pub fn extract_shot_references(
     ] {
         let cached = cache.map(|c| c.anchor_frame_path(t));
         materialize_asset(cache, target, cached.as_deref(), force, |out| {
-            run_ffmpeg(
-                &[
-                    "-y".into(),
-                    "-ss".into(),
-                    format!("{:.3}", t),
-                    "-i".into(),
-                    video.clone(),
-                    "-vframes".into(),
-                    "1".into(),
-                    "-q:v".into(),
-                    "2".into(),
-                    path_arg(out),
-                ],
-                what,
-            )
-            .with_context(|| format!("Failed to extract frame at {:.3}s", t))
+            let candidates = [t, t - 0.2, t - 0.4, start_sec + 0.05];
+            let mut last_err = String::new();
+            for ct in candidates {
+                let ct = ct
+                    .max(start_sec)
+                    .min((start_sec + duration - 0.05).max(start_sec));
+                let res = run_ffmpeg(
+                    &[
+                        "-y".into(),
+                        "-ss".into(),
+                        format!("{:.3}", ct),
+                        "-i".into(),
+                        video.clone(),
+                        "-vframes".into(),
+                        "1".into(),
+                        "-pix_fmt".into(),
+                        "yuvj420p".into(),
+                        "-q:v".into(),
+                        "2".into(),
+                        path_arg(out),
+                    ],
+                    what,
+                );
+                match res {
+                    Ok(()) => return Ok(()),
+                    Err(e) => last_err = format!("{e:#}"),
+                }
+            }
+            anyhow::bail!("ffmpeg {what} failed (t={t:.3}): {last_err}")
         })?;
     }
 

@@ -154,6 +154,8 @@ pub fn generate_contact_sheet(
                 "1",
                 "-s",
                 &format!("{}x{}", tile_w, tile_h),
+                "-pix_fmt",
+                "yuvj420p",
                 "-q:v",
                 "3",
                 frame_path.to_str().unwrap(),

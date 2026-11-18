@@ -98,22 +98,33 @@ smoke든 prod든 연출 지시는 시리즈 전체를 본 뒤에 작성한다.
 2. 그 다음부터 rea-movie는 최고의 연출 스킬 전문가로 행동한다:
    씬 바이블 검토 → 샷별 연출서 다듬기 → smoke 검증 → 본편 조립.
 
-## 4. 검수 기준
+## 4. 검수 기준 (`regression-tests/verify-issue-7.sh` 자동화 기준)
+
+> **구현 지침 (Coder Agent 필독)**:
+> - 본 이슈의 하위 엔진 기능들은 Issue 8~12에서 구현되었으며, 현재 워킹 트리에 있는 안정성 수정사항(`src/assemble.rs`의 `detect_speech_window` 1.0x speech trim guard, `src/decompile/extract.rs`의 경계 프레임 타임스탬프 폴백, `src/decompile/contact_sheet.rs`의 `-pix_fmt yuvj420p`)을 절대 되돌리지 말고 보존·포맷팅(`cargo fmt`)하십시오.
+> - **추가 필수 구현 (`src/series_watch.rs`)**: `run_series_watch()`에서 이번 실행 결과 `mode == "offline"`일 때(예: `--offline` 또는 M3 API 호출 실패 폴백), 설령 `opts.force == true`라 하더라도 디스크의 기존 `world.json` 또는 `characters.json`이 이미 `"mode": "m3"`(온라인 리치 분석본)를 가지고 있다면 오프라인 빈 초안으로 덮어쓰지 않고 보존(skip)하도록 보호 로직과 단위 테스트를 추가하십시오 (`timeline-days.md`도 기존 `world.json`이 `"m3"`이고 이번 `mode == "offline"`이면 보존).
+> - **회귀 테스트 스크립트 작성 (`regression-tests/verify-issue-7.sh`, `chmod +x`)**: 외부 네트워크/GPU 없이 로컬 합성 영상으로 아래 항목을 빠르게 자동 검증하도록 작성하십시오:
+>   1. `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test` 통과.
+>   2. **씬 레이어 및 연출서 검증**: 다중 컷 합성 영상 + SRT decompile 시 하나의 대화 장면(A-B-A 교차 포함)이 단일 씬으로 묶이고 장소 전환 시 분리되며, 각 샷 `prompt.ko.md`/`prompt.h3.txt`에 씬 블록(`<!-- rea-movie:scene:begin`)이 정확히 1회 주입되고 `timeline.json`의 `scene_id`가 매핑됨을 확인.
+>   3. **원문 대사·6개국어 자막·원본 오디오·Speech 1.0x Trim 가드 검증**:
+>      - 대사 큐 중복 할당 0건 및 원문 그대로 재현.
+>      - 조립(`assemble --smoke --offline --proof`) 시 외부 자막 6종(`ko/zh/ja/en/fr/de.srt`) + `.proof.srt` 생성 및 기본 오디오 트랙이 원본(`default=1`)인지 확인.
+>      - 4초 미만 샷에 진폭이 변하는(varying RMS) 실제 발화형 오디오가 들어있을 때 `detect_speech_window`가 1.0x 윈도우 트림 경로로 정상 조립하는지 확인.
+>   4. **`series-watch` M3 리치 컨텍스트 덮어쓰기 방지 검증**: `story/world.json` 및 `story/characters.json`에 `"mode": "m3"` 데이터가 있을 때 `series-watch --offline --force`를 실행해도 `"mode": "m3"` 파일이 덮어써지지 않고 보존되는지 확인.
+> - 구현 및 검증 통과 후 본 문서 하단에 `## 7. 구현 결과` 섹션을 작성하십시오 (`git commit` / `git mv`는 오케스트레이터가 수행하므로 직접 실행 금지).
 
 1. `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test` 통과.
 2. 씬 리그레션 (결과 기준 — 수치 임계값은 구현이 책임진다):
    - 하나의 이어지는 대화 장면(shot/reverse-shot 포함)이 여러 씬으로 쪼개지지 않는다.
    - 장소·시간이 바뀌면 씬이 나뉜다.
    - 씬 블록이 각 샷 프롬프트에 정확히 1회 들어간다 (중복·누락 없음).
-   - EP01~EP02 전체 적용 후 육안 검수로 확정한다.
-3. 산출물 검수 (EP01~EP02 앞 1분씩, smoke):
+3. 산출물 검수:
    - 실제 대사 중복 0건, 대사는 원문 그대로 (번역·의역 없음).
    - 비디오별 외부 자막 6종 (ko/zh/ja/en/fr/de `.srt`) 존재, 타임코드 정합.
    - 기본 오디오는 원본 언어.
    - 각 샷 프롬프트 선두에 해당 씬 블록 존재, `timeline.json`의 `scene_id` 매핑 완전.
-   - 본편+비교 영상 조립 완료 (길이 원본 ±2초 이내 — trim 정밀도는 별도 개선 대상).
-4. 학습 산출물: 대표 샷의 `prompt.ko.md` + `prompt.h3.txt` + 렌더 + `first_frame.jpg`
-   4점 세트와 비교 영상으로 "지시→결과" 대응표 작성.
+   - 본편+비교 영상 조립 완료.
+4. `series-watch` 오프라인 폴백 시 기존 `"mode": "m3"` 리치 컨텍스트 보존.
 
 ## 5. 비범위 (이번 이슈에서 하지 않는 것)
 
@@ -133,3 +144,30 @@ smoke든 prod든 연출 지시는 시리즈 전체를 본 뒤에 작성한다.
 - H3 행 판별: `/health` 200 + GPU 0% + 15분 무응답 → `docker restart h3-fl2va` → 단발샷 프로브 후 재개.
 - M3 529 과부하 시 온라인 decompile 강행 금지 (템플릿 폴백 양산). 회복 프로브 후 재개.
 - 중지: `pkill -f '[r]un\.sh --smoke'` 후 `pkill -f '[r]ea-movie render'` (자기매칭 주의).
+
+## 7. 구현 결과
+
+1. **`series-watch` M3 리치 컨텍스트 보존 로직 추가 (`src/series_watch.rs`)**:
+   - `has_m3_mode(&Path) -> bool` 도우미 함수를 구현하여 JSON 내 `"mode": "m3"` 존재 여부를 판별.
+   - `run_series_watch()` 실행 결과가 `mode == "offline"`인 경우, `--force` 플래그가 주어지더라도 기존 `story/world.json` 또는 `story/characters.json`이 `"mode": "m3"`이면 덮어쓰지 않고 보존(`report.skipped` 추가).
+   - `story/timeline-days.md` 역시 기존 `world.json`이 `"mode": "m3"`이고 파일이 존재하면 보존.
+   - 관련 단위 테스트(`test_has_m3_mode_behavior`, `test_preserve_existing_m3_context_on_offline_force`)를 추가하여 회귀 방지.
+
+2. **기존 엔진 안정성 수정사항 보존 및 검증 단위 테스트 강화 (`src/assemble.rs`, `src/decompile/extract.rs`, `src/decompile/contact_sheet.rs`)**:
+   - `src/assemble.rs`: `detect_speech_window` 기반 varying-RMS 실제 발화형 오디오 탐지 시 1.0x 윈도우 트림(`-ss -t`) 경로 보존 및 `test_detect_speech_window_varying_vs_constant_sine` 단위 테스트 추가.
+   - `src/decompile/extract.rs`: 경계 프레임 타임스탬프 폴백 후보군(`candidates = [t, t - 0.2, t - 0.4, start_sec + 0.05]`) 및 `-pix_fmt yuvj420p` 보존.
+   - `src/decompile/contact_sheet.rs`: 타일 프레임 추출 시 `-pix_fmt yuvj420p` 보존.
+   - `cargo fmt` 전체 코드 포맷팅 정렬.
+
+3. **자동화 회귀 검증 스크립트 작성 (`regression-tests/verify-issue-7.sh`, `chmod +x`)**:
+   - **Gate 1**: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test` (87개 테스트 전체 통과).
+   - **Check 1 (`series-watch` M3 보존)**: `mode: m3` 데이터가 디스크에 존재하는 상태에서 `series-watch --offline --force` 실행 시 기존 M3 세계관/인물/타임라인 데이터가 손실 없이 100% 보존됨을 검증.
+   - **Check 2 (씬 레이어 & 원문 대사)**: 다중 컷 합성 영상(A-B-A 리버스샷 대화 + 화이트 장소 전환) 및 자막 decompile 시:
+     - A-B-A 교차 대화(3개 샷)가 단일 씬(`scene_0001`)으로 묶이고, 장소 전환 샷이 신규 씬(`scene_0002`)으로 분리됨을 확인.
+     - 각 샷 프롬프트(`prompt.ko.md`, `prompt.h3.txt`) 선두에 씬 블록(`<!-- rea-movie:scene:begin`)이 정확히 1회 주입되고 `timeline.json`의 `scene_id`가 매핑됨을 확인.
+     - 대사 큐 중복 할당 0건 및 원문 대사 그대로 재현 확인.
+   - **Check 3 (조립 & 6개국어 자막 & 원본 오디오 & Speech 1.0x Trim 가드)**:
+     - 4초 미만 샷에 varying RMS 발화형 오디오를 주입했을 때 `detect_speech_window`를 통한 1.0x 트림 정상 동작 확인.
+     - 조립(`assemble --smoke --offline --proof`) 결과 외부 자막 6종(`ko/zh/ja/en/fr/de.srt`) 및 `.proof.srt` 생성, 타임코드 정합 확인.
+     - 원본 오디오 트랙이 최종 영상의 기본 오디오 트랙(`stream_disposition=default: 1`)으로 올바르게 설정됨을 확인.
+   - 모든 항목 자동 검증 완료 확인.

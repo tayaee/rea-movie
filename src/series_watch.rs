@@ -551,6 +551,19 @@ fn summarize_with_m3(episodes: &[Episode], api_key: &str) -> Result<Value> {
     Err(last_err.unwrap_or_else(|| anyhow::anyhow!("series-watch M3 failed")))
 }
 
+fn has_m3_mode(path: &Path) -> bool {
+    if !path.exists() {
+        return false;
+    }
+    let Ok(data) = std::fs::read_to_string(path) else {
+        return false;
+    };
+    let Ok(val): Result<Value, _> = serde_json::from_str(&data) else {
+        return false;
+    };
+    val.get("mode").and_then(|m| m.as_str()) == Some("m3")
+}
+
 fn write_if_needed(
     path: &Path,
     content: &str,
@@ -712,19 +725,49 @@ pub fn run_series_watch(opts: SeriesWatchOptions) -> Result<SeriesWatchReport> {
         days_md.push('\n');
     }
 
-    write_if_needed(
-        &world_path,
-        &serde_json::to_string_pretty(&world)?,
-        opts.force,
-        &mut report,
-    )?;
-    write_if_needed(
-        &chars_path,
-        &serde_json::to_string_pretty(&characters)?,
-        opts.force,
-        &mut report,
-    )?;
-    write_if_needed(&days_path, &days_md, opts.force, &mut report)?;
+    let existing_world_is_m3 = has_m3_mode(&world_path);
+    let existing_chars_is_m3 = has_m3_mode(&chars_path);
+
+    if mode == "offline" && existing_world_is_m3 {
+        log(&format!(
+            "skip (preserve existing m3): {}",
+            world_path.display()
+        ));
+        report.skipped.push(world_path.clone());
+    } else {
+        write_if_needed(
+            &world_path,
+            &serde_json::to_string_pretty(&world)?,
+            opts.force,
+            &mut report,
+        )?;
+    }
+
+    if mode == "offline" && existing_chars_is_m3 {
+        log(&format!(
+            "skip (preserve existing m3): {}",
+            chars_path.display()
+        ));
+        report.skipped.push(chars_path.clone());
+    } else {
+        write_if_needed(
+            &chars_path,
+            &serde_json::to_string_pretty(&characters)?,
+            opts.force,
+            &mut report,
+        )?;
+    }
+
+    if mode == "offline" && existing_world_is_m3 && days_path.exists() {
+        log(&format!(
+            "skip (preserve existing m3): {}",
+            days_path.display()
+        ));
+        report.skipped.push(days_path.clone());
+    } else {
+        write_if_needed(&days_path, &days_md, opts.force, &mut report)?;
+    }
+
     report.mode = mode;
     log(&format!(
         "done: {} episode(s), mode={}, story at {}",
@@ -770,5 +813,100 @@ mod tests {
         let ex = subtitle_excerpt(&cues, 2_000);
         assert!(ex.len() <= 2_200);
         assert!(ex.contains("line number 0 "));
+    }
+
+    #[test]
+    fn test_has_m3_mode_behavior() {
+        let dir = tempfile::tempdir().unwrap();
+        let p_m3 = dir.path().join("m3.json");
+        std::fs::write(&p_m3, r#"{"mode": "m3", "val": 1}"#).unwrap();
+        assert!(has_m3_mode(&p_m3));
+
+        let p_offline = dir.path().join("offline.json");
+        std::fs::write(&p_offline, r#"{"mode": "offline", "val": 1}"#).unwrap();
+        assert!(!has_m3_mode(&p_offline));
+
+        let p_invalid = dir.path().join("invalid.json");
+        std::fs::write(&p_invalid, "not json").unwrap();
+        assert!(!has_m3_mode(&p_invalid));
+
+        let p_missing = dir.path().join("missing.json");
+        assert!(!has_m3_mode(&p_missing));
+    }
+
+    #[test]
+    fn test_preserve_existing_m3_context_on_offline_force() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let story = root.join("story");
+        std::fs::create_dir_all(&story).unwrap();
+
+        let world_path = story.join("world.json");
+        let chars_path = story.join("characters.json");
+        let days_path = story.join("timeline-days.md");
+
+        std::fs::write(
+            &world_path,
+            r#"{"mode": "m3", "locations": [{"name": "M3-Castle"}]}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            &chars_path,
+            r#"{"mode": "m3", "characters": [{"id": "P1", "name": "M3-King"}]}"#,
+        )
+        .unwrap();
+        std::fs::write(&days_path, "# M3 Timeline\nDay 1 in Castle\n").unwrap();
+
+        let vid_path = root.join("ep01.mp4");
+        let status = std::process::Command::new("ffmpeg")
+            .args([
+                "-nostdin",
+                "-v",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "color=c=black:s=64x64:d=0.5",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "ultrafast",
+                vid_path.to_str().unwrap(),
+            ])
+            .status();
+        if status.is_err() || !status.unwrap().success() {
+            return;
+        }
+
+        let input_str = vid_path.to_string_lossy().to_string();
+        let inputs = vec![input_str];
+        let opts = SeriesWatchOptions {
+            inputs: &inputs,
+            source_dir: None,
+            out_root: Some(root),
+            offline: true,
+            force: true,
+            interval: 5.0,
+        };
+
+        let report = run_series_watch(opts).unwrap();
+        assert_eq!(report.mode, "offline");
+        assert!(report.skipped.contains(&world_path));
+        assert!(report.skipped.contains(&chars_path));
+        assert!(report.skipped.contains(&days_path));
+
+        let world_after: Value =
+            serde_json::from_str(&std::fs::read_to_string(&world_path).unwrap()).unwrap();
+        assert_eq!(world_after["mode"], "m3");
+        assert_eq!(world_after["locations"][0]["name"], "M3-Castle");
+
+        let chars_after: Value =
+            serde_json::from_str(&std::fs::read_to_string(&chars_path).unwrap()).unwrap();
+        assert_eq!(chars_after["mode"], "m3");
+        assert_eq!(chars_after["characters"][0]["name"], "M3-King");
+
+        let days_after = std::fs::read_to_string(&days_path).unwrap();
+        assert!(days_after.contains("# M3 Timeline"));
     }
 }
