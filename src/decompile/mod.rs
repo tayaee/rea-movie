@@ -459,6 +459,7 @@ pub fn run_decompile(opts: DecompileOptions) -> Result<PathBuf> {
     }
 
     // 5b. Scene grouping from visual discontinuity + dialogue silence + cap.
+    // Issue 10: 1-hop distance plus 2-hop/3-hop lookback for A-B-A reverse shots.
     let hist_dists: Vec<f64> = spans
         .iter()
         .enumerate()
@@ -477,7 +478,39 @@ pub fn run_decompile(opts: DecompileOptions) -> Result<PathBuf> {
             crate::scenes::hist_distance_jpeg(&prev, &cur)
         })
         .collect();
-    let scenes = crate::scenes::group_scenes(&span_bounds, &subtitle_cues, &hist_dists);
+    let lookback_min_hist: Vec<f64> = spans
+        .iter()
+        .enumerate()
+        .map(|(i, span)| {
+            if i < 2 {
+                return f64::INFINITY;
+            }
+            let cur = shots_dir
+                .join(&span.shot_id)
+                .join("refs")
+                .join("contact_sheet.jpg");
+            let mut best = f64::INFINITY;
+            for back in [2usize, 3usize] {
+                if i >= back {
+                    let older = shots_dir
+                        .join(&spans[i - back].shot_id)
+                        .join("refs")
+                        .join("contact_sheet.jpg");
+                    let d = crate::scenes::hist_distance_jpeg(&older, &cur);
+                    if d < best {
+                        best = d;
+                    }
+                }
+            }
+            best
+        })
+        .collect();
+    let scenes = crate::scenes::group_scenes_with_lookback(
+        &span_bounds,
+        &subtitle_cues,
+        &hist_dists,
+        &lookback_min_hist,
+    );
     println!(
         "{} ==> Grouped {} shot(s) into {} scene(s)",
         crate::log::stamp(),
@@ -603,6 +636,9 @@ pub fn run_decompile(opts: DecompileOptions) -> Result<PathBuf> {
                 characters: work.characters.clone(),
                 audio_peaks: work.peaks.clone(),
                 scene_id: scene_id.clone(),
+                delivery_mode: String::new(),
+                shot_size: String::new(),
+                camera_angle: String::new(),
             });
             if meta.characters.is_empty() {
                 meta.characters = work.characters.clone();
@@ -624,6 +660,9 @@ pub fn run_decompile(opts: DecompileOptions) -> Result<PathBuf> {
                 characters: work.characters.clone(),
                 audio_peaks: work.peaks.clone(),
                 scene_id: scene_id.clone(),
+                delivery_mode: String::new(),
+                shot_size: String::new(),
+                camera_angle: String::new(),
             };
             meta.save_to_file(&shot_toml_path)?;
             meta
@@ -640,6 +679,9 @@ pub fn run_decompile(opts: DecompileOptions) -> Result<PathBuf> {
             assignee: "".to_string(),
             characters: shot_meta.characters.clone(),
             scene_id: scene_id.clone(),
+            delivery_mode: shot_meta.delivery_mode.clone(),
+            shot_size: shot_meta.shot_size.clone(),
+            camera_angle: shot_meta.camera_angle.clone(),
         });
 
         // Prompts
@@ -677,6 +719,7 @@ pub fn run_decompile(opts: DecompileOptions) -> Result<PathBuf> {
         }
 
         // Issue 9: anchor frames for <Picture 1>/<Picture 2> injection.
+        // Issue 10: delivery mode + on-screen cast + camera grammar.
         let first_frame_path = work.shot_dir.join("refs").join("first_frame.jpg");
         let last_frame_path = work.shot_dir.join("refs").join("last_frame.jpg");
         let prompt_ctx = PromptGenContext {
@@ -712,6 +755,10 @@ pub fn run_decompile(opts: DecompileOptions) -> Result<PathBuf> {
             scene_bible,
             series_world_summary: series_world_summary.as_deref(),
             anchor: shot_meta.anchor.as_str(),
+            delivery_mode: shot_meta.delivery_mode.as_str(),
+            on_screen_characters: &shot_meta.characters,
+            shot_size: shot_meta.shot_size.as_str(),
+            camera_angle: shot_meta.camera_angle.as_str(),
         };
 
         // Section 3.2 & Section 3.5: Resolve blocks and inject into prompts

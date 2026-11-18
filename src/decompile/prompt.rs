@@ -26,6 +26,11 @@ pub struct PromptGenContext<'a> {
     pub scene_bible: Option<&'a crate::scenes::SceneBible>,
     pub series_world_summary: Option<&'a str>,
     pub anchor: &'a str,
+    // Issue 10: on-screen vs off-screen delivery + per-shot camera grammar.
+    pub delivery_mode: &'a str,
+    pub on_screen_characters: &'a [String],
+    pub shot_size: &'a str,
+    pub camera_angle: &'a str,
 }
 
 /// Expected H3 reference header for an anchor kind (issue 9).
@@ -441,6 +446,103 @@ pub fn translate_line_to_korean(line: &str) -> String {
     clean
 }
 
+/// Issue 10: decide whether the dialogue is spoken on-screen by the visible
+/// subject or heard off-screen (voice-over / reaction cut).
+///
+/// Returns one of `"on_screen" | "off_screen" | "reaction" | "silent"`.
+///
+/// Rules (in order):
+/// 1. Explicit `delivery_mode` hint (`off_screen`/`reaction`/`silent`/`on_screen`) wins.
+/// 2. Empty dialogue -> `silent`.
+/// 3. Off-screen markers in the cue text (`[off]`, `(off-screen)`, `(VO)`,
+///    `(V.O.)`, `(내레이션)`, `(마음의 소리)` and case-insensitive variants) -> `off_screen`.
+/// 4. A `[Sx]` speaker tag that is NOT in `on_screen_characters`, or a `speaker`
+///    that is absent from `on_screen_characters` while dialogue exists -> `off_screen`.
+/// 5. Otherwise `on_screen`.
+pub fn infer_delivery_mode(
+    delivery_hint: &str,
+    subtitle_lines: &[String],
+    speaker: &str,
+    on_screen_characters: &[String],
+) -> String {
+    let hint = delivery_hint.trim().to_ascii_lowercase();
+    match hint.as_str() {
+        "off_screen" | "off-screen" | "offscreen" | "off screen" | "voice-over" | "voiceover"
+        | "vo" | "v.o." => return "off_screen".to_string(),
+        "reaction" => return "reaction".to_string(),
+        "silent" => return "silent".to_string(),
+        "on_screen" | "on-screen" | "onscreen" | "on screen" => return "on_screen".to_string(),
+        _ => {}
+    }
+    let non_empty: Vec<&String> = subtitle_lines
+        .iter()
+        .filter(|l| !l.trim().is_empty())
+        .collect();
+    if non_empty.is_empty() {
+        return "silent".to_string();
+    }
+    let joined_lower = subtitle_lines.join(" ").to_ascii_lowercase();
+    // Off-screen / voice-over markers (spec + common variants).
+    let markers = [
+        "[off]",
+        "(off-screen)",
+        "(off screen)",
+        "(offscreen)",
+        "(vo)",
+        "(v.o.)",
+        "v.o.",
+        "(내레이션)",
+        "내레이션",
+        "(마음의 소리)",
+        "마음의 소리",
+        "[vo]",
+        "(voice-over)",
+        "voice-over",
+        "voiceover",
+        "(o.s.)",
+        "o.s.",
+    ];
+    // "(vo)" style markers need paren-aware matching; the lowercased join covers it.
+    for m in markers {
+        if joined_lower.contains(m) {
+            return "off_screen".to_string();
+        }
+    }
+    // [Sx] speaker tags inside the cue text that are not visible on screen.
+    let on_upper: Vec<String> = on_screen_characters
+        .iter()
+        .map(|c| c.to_ascii_uppercase())
+        .collect();
+    for line in subtitle_lines.iter() {
+        let mut rest = line.as_str();
+        while let Some(open) = rest.find('[') {
+            let after = &rest[open + 1..];
+            if let Some(close) = after.find(']') {
+                let inner = after[..close].trim().to_ascii_uppercase();
+                // Accept S1, S2, ... (optionally followed by extra words).
+                let head: String = inner.split_whitespace().next().unwrap_or("").to_string();
+                let is_tag = head.len() >= 2
+                    && head.starts_with('S')
+                    && head[1..].chars().all(|c| c.is_ascii_digit());
+                if is_tag && !on_upper.is_empty() && !on_upper.contains(&head) {
+                    return "off_screen".to_string();
+                }
+                rest = &after[close + 1..];
+            } else {
+                break;
+            }
+        }
+    }
+    // Speaker itself is not visible on screen while dialogue exists.
+    if !on_upper.is_empty()
+        && !speaker.trim().is_empty()
+        && !on_upper.contains(&speaker.trim().to_ascii_uppercase())
+    {
+        return "off_screen".to_string();
+    }
+    "on_screen".to_string()
+}
+
 fn build_dialogue_lines(ctx: &PromptGenContext) -> (String, String) {
     let want_ko = is_korean_dub(ctx.dub_lang);
     let lang_tag = if want_ko { "Korean" } else { "English" };
@@ -462,6 +564,30 @@ fn build_dialogue_lines(ctx: &PromptGenContext) -> (String, String) {
         } else {
             ctx.subtitle_lines.join(" ")
         };
+
+        // Issue 10: off-screen / reaction delivery never lip-syncs the on-screen subject.
+        let mode = infer_delivery_mode(
+            ctx.delivery_mode,
+            ctx.subtitle_lines,
+            ctx.speaker,
+            ctx.on_screen_characters,
+        );
+        if mode == "off_screen" || mode == "reaction" {
+            let ko_line = format!(
+                "- [화면 밖 음성 / 리액션 샷] 화면 속 인물은 입을 다문 채 자연스러운 표정·시선 리액션을 유지하고, 화면 밖(Off-screen)에서 {}의 목소리가 들린다: <d>[{}] {}</d>",
+                ctx.speaker, lang_tag, joined_dialogue
+            );
+            let h3_line = format!(
+                "The on-screen subject remains silent with natural listening reaction and closed lips (no lip movement), while {} speaks off-screen (voice-over): <d>[{}] {}</d>.",
+                ctx.speaker, lang_tag, joined_dialogue
+            );
+            return (ko_line, h3_line);
+        }
+        if mode == "silent" {
+            let ko_line = "- 대사 없음 (인물 표정 연기 및 현장 환경음 중심)".to_string();
+            let h3_line = "No spoken dialogue in this shot; characters remain silent with natural ambient sound.".to_string();
+            return (ko_line, h3_line);
+        }
 
         let ko_line = format!(
             "- {}: <d>[{}] {}</d>",
@@ -534,6 +660,12 @@ fn format_scene_bible_for_m3(bible: &crate::scenes::SceneBible) -> String {
     if !bible.eyeline_notes.is_empty() {
         parts.push(format!("Eyeline grammar: {}.", bible.eyeline_notes));
     }
+    if !bible.axis_of_action.is_empty() {
+        parts.push(format!("Axis of action: {}.", bible.axis_of_action));
+    }
+    if !bible.camera_grammar.is_empty() {
+        parts.push(format!("Camera grammar: {}.", bible.camera_grammar));
+    }
     if !bible.dialogue_flow.is_empty() {
         parts.push(format!("Dialogue flow: {}.", bible.dialogue_flow));
     }
@@ -560,7 +692,7 @@ fn try_minimax_m3_api(ctx: &PromptGenContext, api_key: &str) -> Result<(String, 
         .build()?;
 
     let (ko_dlg, h3_dlg) = build_dialogue_lines(ctx);
-    let system_prompt = "You are a professional film reverse-engineering director and prompt engineer for MiniMax-H3 video generation. Analyze the provided storyboard images and output valid JSON with two fields: 'prompt_ko' and 'prompt_h3'. prompt_h3 must adhere to the MiniMax-H3 schema with 'integrated_multimodal_description:', 'overall_soundscape:', and 'non_diegetic_music:'. Keep the exact <d>[Language] ...</d> dialogue tag provided by the user. The shot body itself must use the scene bible person IDs (S1, S2, ...) and eyeline directions with 100% consistency. NEGATIVE RULES (never describe these): broadcast station logos (e.g. VA logo), watermarks, burned-in timestamp numbers, hardcoded subtitle text, or any on-screen overlay graphics. Describe only the underlying cinematic scene without visual noise.";
+    let system_prompt = "You are a professional film reverse-engineering director and prompt engineer for MiniMax-H3 video generation. Analyze the provided storyboard images and output valid JSON with two fields: 'prompt_ko' and 'prompt_h3'. prompt_h3 must adhere to the MiniMax-H3 schema with 'integrated_multimodal_description:', 'overall_soundscape:', and 'non_diegetic_music:'. Keep the exact <d>[Language] ...</d> dialogue tag provided by the user. The shot body itself must use the scene bible person IDs (S1, S2, ...) and eyeline directions with 100% consistency. Delivery mode: describe whether the on-screen subject speaks directly with synchronized lip movement (on-screen) or remains silent with a natural listening reaction and closed lips while another voice speaks off-screen as voice-over (off-screen/reaction); never describe a silent on-screen listener as speaking with synchronized lip movement. NEGATIVE RULES (never describe these): broadcast station logos (e.g. VA logo), watermarks, burned-in timestamp numbers, hardcoded subtitle text, or any on-screen overlay graphics. Describe only the underlying cinematic scene without visual noise.";
     let anchor = if ctx.anchor.is_empty() {
         "first_and_last"
     } else {
@@ -810,7 +942,7 @@ pub fn generate_scene_bible_m3(
         .timeout(std::time::Duration::from_secs(300))
         .build()?;
 
-    let system_prompt = "You are a TV drama script supervisor. Given timestamped storyboard frames and dialogue lines from ONE continuous scene, output valid JSON with exactly these keys, ALL VALUES AS STRINGS (dialogue_flow: one multi-line string, never an array): location, time_of_day, characters (array of {id, appearance, wardrobe}), spatial_map, eyeline_notes, dialogue_flow, lighting. Rules: label distinct people S1, S2, ... consistently across ALL frames by persistent appearance (face, hair, wardrobe) even when the camera angle changes; appearance must list re-identification features; spatial_map describes where each person is and faces; eyeline_notes state who looks toward whom (screen direction); dialogue_flow summarizes who speaks to whom in order. Output JSON only, no markdown.";
+    let system_prompt = "You are a TV drama script supervisor. Given timestamped storyboard frames and dialogue lines from ONE continuous scene, output valid JSON with exactly these keys, ALL VALUES AS STRINGS (dialogue_flow: one multi-line string, never an array): location, time_of_day, characters (array of {id, appearance, wardrobe}), spatial_map, eyeline_notes, dialogue_flow, lighting, axis_of_action, camera_grammar. Rules: label distinct people S1, S2, ... consistently across ALL frames by persistent appearance (face, hair, wardrobe) even when the camera angle changes; appearance must list re-identification features; spatial_map describes where each person is and faces; eyeline_notes state who looks toward whom (screen direction); axis_of_action states the 180-degree axis and left/right screen rules (e.g. S1 on screen-left looking right; S2 on screen-right looking left) and must never be crossed by the camera; camera_grammar states the master shot size and OTS/reverse-shot coverage; dialogue_flow summarizes who speaks to whom in order. Output JSON only, no markdown.";
     let dialogue_text = dialogue
         .iter()
         .map(|(t, line)| format!("[{t:.1}s] {line}"))
@@ -1019,6 +1151,33 @@ fn generate_deterministic_template(ctx: &PromptGenContext) -> (String, String) {
         Some(s) if !s.trim().is_empty() => format!("\nSeries context: {}.", s.trim()),
         _ => String::new(),
     };
+    // Issue 10: per-shot camera grammar (only when explicitly set in shot.toml).
+    let ko_cam = if ctx.shot_size.trim().is_empty() && ctx.camera_angle.trim().is_empty() {
+        String::new()
+    } else {
+        format!(
+            "\n- 샷 사이즈/앵글: {}{}",
+            ctx.shot_size.trim(),
+            if ctx.camera_angle.trim().is_empty() {
+                String::new()
+            } else {
+                format!(" / {}", ctx.camera_angle.trim())
+            }
+        )
+    };
+    let h3_cam = if ctx.shot_size.trim().is_empty() && ctx.camera_angle.trim().is_empty() {
+        String::new()
+    } else {
+        format!(
+            " Shot size/angle: {}{}.",
+            ctx.shot_size.trim(),
+            if ctx.camera_angle.trim().is_empty() {
+                String::new()
+            } else {
+                format!(" / {}", ctx.camera_angle.trim())
+            }
+        )
+    };
 
     let ko = format!(
         r#"# 샷 연출 지시서: {} ({:.2}s ~ {:.2}s)
@@ -1026,7 +1185,7 @@ fn generate_deterministic_template(ctx: &PromptGenContext) -> (String, String) {
 ## 1. 화면 및 카메라 연출
 - 카메라: 원본 첫 프레임(<Picture 1>)과 끝 프레임(<Picture 2>) 구도를 정밀하게 잇는 시네마틱 샷
 - 조명 및 색감: 자연스러운 현장 조명과 높은 다이내믹 레인지 대비
-- 인물 구도: 프레임 내 인물 위치와 시선 방향을 일관되게 유지{}
+- 인물 구도: 프레임 내 인물 위치와 시선 방향을 일관되게 유지{}{}
 
 ## 2. 초 단위 동작 궤적
 - 0.0s ~ {:.1}s: 시작 프레임 구도에서 인물이 자연스러운 호흡과 시선을 유지하며 동작을 이어간다.
@@ -1046,6 +1205,7 @@ fn generate_deterministic_template(ctx: &PromptGenContext) -> (String, String) {
         ctx.start_sec,
         ctx.end_sec,
         ko_mod,
+        ko_cam,
         half_dur,
         half_dur,
         dur_round,
@@ -1057,7 +1217,7 @@ fn generate_deterministic_template(ctx: &PromptGenContext) -> (String, String) {
         r#"{reference_line}
 
 integrated_multimodal_description:
-From 0.0s to {:.1}s, the camera and subjects follow a smooth, realistic trajectory anchored by the first frame.{} {} At {}, a subtle acoustic peak is heard. Describe the exact Delta trajectory from <Picture 1> through the middle motion to <Picture 2>.{} Do not describe broadcast logos, watermarks, burned-in timestamps, or hardcoded subtitle text.
+From 0.0s to {:.1}s, the camera and subjects follow a smooth, realistic trajectory anchored by the first frame.{} {} At {}, a subtle acoustic peak is heard.{} Describe the exact Delta trajectory from <Picture 1> through the middle motion to <Picture 2>.{} Do not describe broadcast logos, watermarks, burned-in timestamps, or hardcoded subtitle text.
 From {:.1}s to {:.1}s, subtle head movement, natural gesture, and facial expression transition seamlessly into the final frame composition.
 
 overall_soundscape:
@@ -1066,7 +1226,7 @@ Realistic spatial ambiance with clean environmental presence and natural acousti
 non_diegetic_music:
 Subtle, restrained cinematic underscore maintaining dramatic tension without overpowering the dialogue.
 "#,
-        half_dur, h3_mod, h3_dlg, peak_str, series_line, half_dur, dur_round
+        half_dur, h3_mod, h3_dlg, peak_str, h3_cam, series_line, half_dur, dur_round
     );
 
     (ko, h3)
@@ -1293,5 +1453,92 @@ Let's emit JSON:
         let fixed2 = ensure_h3_reference_header(stale, 9, "first_and_last");
         assert!(fixed2.contains("[Shot 9]"));
         assert!(!fixed2.contains("WRONG"));
+    }
+
+    fn test_ctx<'a>(
+        subtitle_lines: &'a [String],
+        speaker: &'a str,
+        on_screen: &'a [String],
+        delivery_mode: &'a str,
+    ) -> PromptGenContext<'a> {
+        let tmp = std::path::PathBuf::from("/tmp/nonexistent_contact.jpg");
+        // Leak to satisfy lifetime in test; only used for path existence checks
+        // that gracefully handle missing files.
+        let leaked: &'static Path = Box::leak(Box::new(tmp) as Box<std::path::PathBuf>);
+        PromptGenContext {
+            shot_id: "shot_0001",
+            shot_index: 1,
+            start_sec: 0.0,
+            end_sec: 2.0,
+            duration: 2.0,
+            is_chained_longtake: false,
+            audio_peaks: &[],
+            speaker,
+            contact_sheet_path: leaked,
+            offline: true,
+            force: false,
+            dub_lang: "ko",
+            subtitle_lines,
+            has_subtitle_track: true,
+            custom_mod: None,
+            first_frame_path: None,
+            last_frame_path: None,
+            scene_bible: None,
+            series_world_summary: None,
+            anchor: "first_and_last",
+            delivery_mode,
+            on_screen_characters: on_screen,
+            shot_size: "",
+            camera_angle: "",
+        }
+    }
+
+    #[test]
+    fn test_infer_delivery_mode_markers_and_hints() {
+        let on = vec!["S1".to_string()];
+        assert_eq!(
+            infer_delivery_mode("", &["hello".to_string()], "S1", &on),
+            "on_screen"
+        );
+        assert_eq!(
+            infer_delivery_mode("", &["(VO) hello".to_string()], "S1", &on),
+            "off_screen"
+        );
+        assert_eq!(
+            infer_delivery_mode("", &["(내레이션) 안녕".to_string()], "S1", &on),
+            "off_screen"
+        );
+        assert_eq!(
+            infer_delivery_mode("", &["[S2] hey".to_string()], "S2", &on),
+            "off_screen"
+        );
+        assert_eq!(
+            infer_delivery_mode("off_screen", &["hello".to_string()], "S1", &on),
+            "off_screen"
+        );
+        assert_eq!(
+            infer_delivery_mode("", &["   ".to_string()], "S1", &on),
+            "silent"
+        );
+    }
+
+    #[test]
+    fn test_build_dialogue_off_screen_has_no_lipsync() {
+        let on = vec!["S1".to_string()];
+        let lines = vec!["(VO) 밖에 비가 온다.".to_string()];
+        let ctx = test_ctx(&lines, "S1", &on, "");
+        let (ko, h3) = build_dialogue_lines(&ctx);
+        assert!(ko.contains("화면 밖"), "ko: {ko}");
+        assert!(h3.contains("no lip movement"), "h3: {h3}");
+        assert!(h3.contains("off-screen"), "h3: {h3}");
+        assert!(!h3.contains("synchronized lip movement"), "h3: {h3}");
+
+        // On-screen keeps lip sync and never mentions off-screen.
+        let lines2 = vec!["안녕하세요.".to_string()];
+        let ctx2 = test_ctx(&lines2, "S1", &on, "");
+        let (ko2, h3_2) = build_dialogue_lines(&ctx2);
+        assert!(h3_2.contains("synchronized lip movement"), "h3: {h3_2}");
+        assert!(!h3_2.contains("no lip movement"));
+        assert!(!ko2.contains("화면 밖"));
     }
 }

@@ -404,6 +404,9 @@ mod tests {
             characters: vec!["S1".to_string()],
             audio_peaks: vec![],
             scene_id: String::new(),
+            delivery_mode: String::new(),
+            shot_size: String::new(),
+            camera_angle: String::new(),
         }
     }
 

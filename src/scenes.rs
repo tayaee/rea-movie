@@ -11,6 +11,10 @@ pub const SILENCE_SPLIT_SECS: f64 = 3.0;
 pub const HIST_SPLIT: f64 = 0.55;
 pub const MAX_SCENE_SECS: f64 = 45.0;
 pub const CAP_SILENCE_SECS: f64 = 0.5;
+/// Issue 10: Shot/Reverse-Shot lookback threshold. When the current shot is
+/// within this distance of the shot 2 or 3 cuts ago, the 1-hop visual cut is
+/// treated as a camera-angle change inside one space instead of a location change.
+pub const REVERSE_SHOT_MAX_HIST: f64 = 0.28;
 const BOUNDARY_EPS: f64 = 0.15;
 
 #[derive(Debug, Clone)]
@@ -27,10 +31,35 @@ pub struct SceneSpan {
 /// when the visual discontinuity reaches `HIST_SPLIT`, or when the running
 /// scene exceeds `MAX_SCENE_SECS` at a boundary with at least `CAP_SILENCE_SECS`
 /// of silence. Every span belongs to exactly one scene.
+#[allow(dead_code)]
 pub fn group_scenes(
     spans: &[(f64, f64)],
     cues: &[SubtitleCue],
     hist_dists: &[f64],
+) -> Vec<SceneSpan> {
+    let lookback = vec![f64::INFINITY; spans.len()];
+    group_scenes_with_lookback(spans, cues, hist_dists, &lookback)
+}
+
+/// Issue 10: A-B-A cross-edit aware grouping.
+///
+/// `hist_dists[i]` is the 1-hop distance between shot i-1 and shot i.
+/// `lookback_min_hist[i]` is min(distance(i, i-2), distance(i, i-3)):
+/// how close the current shot is to the shot 2 or 3 cuts ago.
+///
+/// When `hist_dists[i] >= HIST_SPLIT` but the neighbourhood proves a
+/// Shot/Reverse-Shot angle change (lookback at i, i+1 or i+2 <=
+/// REVERSE_SHOT_MAX_HIST), the boundary does NOT split. The i+1/i+2
+/// prospective check handles the A-B-A onset: the very first A->B cut has
+/// no history yet, but the immediate return to A proves it was an angle
+/// change inside one space (e.g. bright A <-> dark B conversation).
+/// Silence (`SILENCE_SPLIT_SECS`) and cap (`MAX_SCENE_SECS` + `CAP_SILENCE_SECS`)
+/// splits are always respected; only the visual-cut split is suppressed.
+pub fn group_scenes_with_lookback(
+    spans: &[(f64, f64)],
+    cues: &[SubtitleCue],
+    hist_dists: &[f64],
+    lookback_min_hist: &[f64],
 ) -> Vec<SceneSpan> {
     let mut scenes = Vec::new();
     if spans.is_empty() {
@@ -77,8 +106,19 @@ pub fn group_scenes(
         let silence = gap_at(i);
         let hist = hist_dists.get(i).copied().unwrap_or(0.0);
         let scene_len = spans[i - 1].1 - spans[start_idx].0;
+        // Issue 10: suppress ONLY the visual-cut split for A-B-A reverse shots.
+        // Prospective neighbourhood (i, i+1, i+2) proves the onset cut.
+        let mut reverse_evidence = lookback_min_hist.get(i).copied().unwrap_or(f64::INFINITY);
+        for ahead in [1usize, 2usize] {
+            if let Some(&v) = lookback_min_hist.get(i + ahead) {
+                if v < reverse_evidence {
+                    reverse_evidence = v;
+                }
+            }
+        }
+        let visual_split = hist >= HIST_SPLIT && reverse_evidence > REVERSE_SHOT_MAX_HIST;
         let split = silence >= SILENCE_SPLIT_SECS
-            || hist >= HIST_SPLIT
+            || visual_split
             || (scene_len > MAX_SCENE_SECS && silence >= CAP_SILENCE_SECS);
         if split {
             scenes.push(SceneSpan {
@@ -211,6 +251,11 @@ pub struct SceneBible {
     pub dialogue_flow: String,
     #[serde(default, deserialize_with = "de_flex_string")]
     pub lighting: String,
+    // Issue 10: 180-degree axis + camera grammar (back-compat defaults).
+    #[serde(default, deserialize_with = "de_flex_string")]
+    pub axis_of_action: String,
+    #[serde(default, deserialize_with = "de_flex_string")]
+    pub camera_grammar: String,
 }
 
 impl SceneBible {
@@ -281,6 +326,8 @@ pub fn offline_bible(scene: &SceneSpan, cast: &[String], cues: &[SubtitleCue]) -
         eyeline_notes: String::new(),
         dialogue_flow,
         lighting: String::new(),
+        axis_of_action: String::new(),
+        camera_grammar: String::new(),
     }
 }
 
@@ -316,6 +363,12 @@ pub fn format_scene_block_ko(bible: &SceneBible) -> String {
     }
     if !bible.eyeline_notes.is_empty() {
         out.push_str(&format!("- 시선: {}\n", bible.eyeline_notes));
+    }
+    if !bible.axis_of_action.is_empty() {
+        out.push_str(&format!("- 180도 축: {}\n", bible.axis_of_action));
+    }
+    if !bible.camera_grammar.is_empty() {
+        out.push_str(&format!("- 카메라 문법: {}\n", bible.camera_grammar));
     }
     if !bible.dialogue_flow.is_empty() {
         out.push_str(&format!("- 대사 흐름:\n{}\n", bible.dialogue_flow));
@@ -356,6 +409,12 @@ pub fn format_scene_block_h3(bible: &SceneBible) -> String {
     }
     if !bible.eyeline_notes.is_empty() {
         parts.push(format!("Eyelines: {}.", bible.eyeline_notes));
+    }
+    if !bible.axis_of_action.is_empty() {
+        parts.push(format!("Axis of action: {}.", bible.axis_of_action));
+    }
+    if !bible.camera_grammar.is_empty() {
+        parts.push(format!("Camera grammar: {}.", bible.camera_grammar));
     }
     if !bible.dialogue_flow.is_empty() {
         parts.push(format!(
@@ -490,6 +549,8 @@ mod tests {
             eyeline_notes: String::new(),
             dialogue_flow: String::new(),
             lighting: String::new(),
+            axis_of_action: String::new(),
+            camera_grammar: String::new(),
         };
         let block = format_scene_block_ko(&bible);
         let once = prepend_scene_block("본문", &block);
@@ -544,5 +605,75 @@ mod tests {
         assert_eq!(parsed.scene_id, "scene_0001");
         assert_eq!(parsed.characters.len(), 1);
         assert!(parsed.dialogue_flow.contains("hello"));
+    }
+
+    #[test]
+    fn test_group_scenes_reverse_shot_no_split() {
+        // A-B-A-B cross-edit: 1-hop 0.70 but 2-hop 0.10 -> single scene.
+        let spans: Vec<(f64, f64)> = (0..4)
+            .map(|i| (i as f64 * 2.0, i as f64 * 2.0 + 2.0))
+            .collect();
+        let hist = vec![0.0, 0.70, 0.70, 0.70];
+        let lookback = vec![f64::INFINITY, f64::INFINITY, 0.10, 0.10];
+        let scenes = group_scenes_with_lookback(&spans, &[], &hist, &lookback);
+        assert_eq!(
+            scenes.len(),
+            1,
+            "A-B-A reverse shots must stay in one scene"
+        );
+        assert_eq!(scenes[0].span_start_idx, 0);
+        assert_eq!(scenes[0].span_end_idx, 3);
+    }
+
+    #[test]
+    fn test_group_scenes_true_location_change_splits() {
+        // Real location change: 1-hop, 2-hop, 3-hop all 0.70 -> split.
+        let spans: Vec<(f64, f64)> = (0..4)
+            .map(|i| (i as f64 * 2.0, i as f64 * 2.0 + 2.0))
+            .collect();
+        let hist = vec![0.0, 0.70, 0.70, 0.70];
+        let lookback = vec![f64::INFINITY, f64::INFINITY, 0.70, 0.70];
+        let scenes = group_scenes_with_lookback(&spans, &[], &hist, &lookback);
+        assert!(scenes.len() >= 2, "true location change must split");
+        assert_eq!(scenes[0].span_end_idx, 0);
+    }
+
+    #[test]
+    fn test_group_scenes_silence_still_splits_despite_lookback() {
+        // Silence split is respected even when lookback says reverse-shot.
+        let spans: Vec<(f64, f64)> = (0..4)
+            .map(|i| (i as f64 * 2.0, i as f64 * 2.0 + 2.0))
+            .collect();
+        let cues = vec![cue(0.5, 1.5, "talk"), cue(6.5, 7.5, "after silence")];
+        let hist = vec![0.0, 0.70, 0.70, 0.70];
+        let lookback = vec![f64::INFINITY, f64::INFINITY, 0.10, 0.10];
+        let scenes = group_scenes_with_lookback(&spans, &cues, &hist, &lookback);
+        assert!(scenes.len() >= 2, "silence must still split");
+    }
+
+    #[test]
+    fn test_bible_axis_fields_roundtrip_and_blocks() {
+        let raw = r#"{
+            "scene_id": "scene_0001",
+            "location": "cafe",
+            "axis_of_action": "S1 on screen-left looking right; S2 on screen-right looking left",
+            "camera_grammar": "medium OTS with reverse-shot coverage"
+        }"#;
+        let bible: SceneBible = serde_json::from_str(raw).unwrap();
+        assert!(bible.axis_of_action.contains("screen-left"));
+        assert!(bible.camera_grammar.contains("OTS"));
+        // Back-compat: missing keys default to empty.
+        let legacy: SceneBible = serde_json::from_str(r#"{"scene_id":"s"}"#).unwrap();
+        assert!(legacy.axis_of_action.is_empty());
+        assert!(legacy.camera_grammar.is_empty());
+        let ko = format_scene_block_ko(&bible);
+        assert!(ko.contains("180도 축"));
+        assert!(ko.contains("카메라 문법"));
+        let h3 = format_scene_block_h3(&bible);
+        assert!(h3.contains("Axis of action"));
+        assert!(h3.contains("Camera grammar"));
+        let json = serde_json::to_string(&bible).unwrap();
+        let parsed: SceneBible = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.axis_of_action, bible.axis_of_action);
     }
 }

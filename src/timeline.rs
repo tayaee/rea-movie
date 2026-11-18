@@ -23,6 +23,13 @@ pub struct TimelineShotItem {
     // Scene grouping: which scene this shot belongs to (scene_XXXX).
     #[serde(default)]
     pub scene_id: String,
+    // Issue 10: on-screen vs off-screen delivery + camera grammar (back-compat defaults).
+    #[serde(default)]
+    pub delivery_mode: String,
+    #[serde(default)]
+    pub shot_size: String,
+    #[serde(default)]
+    pub camera_angle: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -42,6 +49,13 @@ pub struct ShotMeta {
     // Scene grouping: which scene this shot belongs to (scene_XXXX).
     #[serde(default)]
     pub scene_id: String,
+    // Issue 10: on-screen vs off-screen delivery + camera grammar (back-compat defaults).
+    #[serde(default)]
+    pub delivery_mode: String,
+    #[serde(default)]
+    pub shot_size: String,
+    #[serde(default)]
+    pub camera_angle: String,
 }
 
 fn default_anchor() -> String {
@@ -105,11 +119,20 @@ mod tests {
             characters: vec!["S1".to_string()],
             audio_peaks: vec![1.2, 3.5],
             scene_id: "scene_0001".to_string(),
+            delivery_mode: String::new(),
+            shot_size: String::new(),
+            camera_angle: String::new(),
         };
         let s = toml::to_string(&meta).unwrap();
         assert!(s.contains("first_and_last"));
         let parsed: ShotMeta = toml::from_str(&s).unwrap();
         assert_eq!(parsed.shot_id, "shot_0001");
         assert_eq!(parsed.audio_peaks, vec![1.2, 3.5]);
+        // Issue 10: missing new keys default to empty (back-compat).
+        let legacy = "shot_id = \"shot_0001\"\nstart_time = 0.0\nend_time = 4.0\nduration = 4.0\n";
+        let parsed_legacy: ShotMeta = toml::from_str(legacy).unwrap();
+        assert!(parsed_legacy.delivery_mode.is_empty());
+        assert!(parsed_legacy.shot_size.is_empty());
+        assert!(parsed_legacy.camera_angle.is_empty());
     }
 }
