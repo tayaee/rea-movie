@@ -1,6 +1,6 @@
 [package]
 name = "rea-movie"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 authors = ["rea-movie contributors"]
 description = "Reverse-engineer any movie into reproducible MiniMax-H3 multi-shot project"
