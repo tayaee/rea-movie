@@ -187,8 +187,13 @@ M3 1회/편 요약(샘플 프레임 + 자막 전체)으로 초안을 만들고 �
 
 ## 4. DGX Spark 서버 풀 관리 (`rea-movie pool`)
 
+첫 사용자는 노드부터 등록한다 (기본 spark1/2는 개발자 환경이므로 그대로 쓰지 말 것):
 ```bash
-# 서버 풀 노드 상태 및 엔드포인트 포트 조회
+# 최초 1회: 1~4대 H3 노드 등록 (대화형; 비대화형은 --nodes 플래그)
+rea-movie pool --proj-dir <proj> setup
+rea-movie pool --proj-dir <proj> setup --nodes h3node1.local,h3node2.local --no-check
+
+# 서버 풀 노드 상태 및 엔드포인트 포트 조회 (전 노드 unreachable이면 setup 힌트 출력)
 rea-movie pool status
 
 # 서버 풀 배포용 런처 스크립트 생성 (~/rea-movie-artifacts 기준)

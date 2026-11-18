@@ -35,6 +35,44 @@ pub enum PoolCommands {
     Status,
     /// Generate and deploy launcher scripts for DGX Spark nodes
     GenerateScripts,
+    /// First-time setup: configure your 1-4 MiniMax-H3 nodes (interactive unless flags given)
+    Setup(PoolSetupArgs),
+}
+
+#[derive(Debug, Clone, clap::Args)]
+pub struct PoolSetupArgs {
+    /// Comma-separated H3 node hostnames (1-4, e.g. "h3node1.local,h3node2.local").
+    /// Omit for interactive prompt.
+    #[arg(long)]
+    pub nodes: Option<String>,
+    /// Base port for dynamic endpoint scanning (default: 8000)
+    #[arg(long)]
+    pub base_port: Option<u16>,
+    /// Shared workspace path on the nodes (default: ~/rea-movie-artifacts)
+    #[arg(long)]
+    pub workspace: Option<String>,
+    /// Skip SSH reachability check
+    #[arg(long, default_value_t = false)]
+    pub no_check: bool,
+}
+
+/// Parse + validate a comma-separated node list (1-4 entries).
+pub fn parse_node_list(raw: &str) -> Result<Vec<String>> {
+    let nodes: Vec<String> = raw
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    if nodes.is_empty() || nodes.len() > 4 {
+        bail!(
+            "Pool supports 1-4 H3 nodes, got {}: {raw}",
+            nodes.len()
+        );
+    }
+    for node in &nodes {
+        validate_hostname(node)?;
+    }
+    Ok(nodes)
 }
 
 /// The H3 model partition that must be resident on a node.
@@ -104,10 +142,16 @@ pub fn run_pool(cmd: PoolCommands) -> Result<()> {
 }
 
 pub fn run_pool_in(cmd: PoolCommands, proj_dir: &Path) -> Result<()> {
-    let config = load_pool_config(proj_dir);
     match cmd {
-        PoolCommands::Status => print_pool_status(&config),
-        PoolCommands::GenerateScripts => generate_and_deploy_scripts(&config),
+        PoolCommands::Status => {
+            let config = load_pool_config(proj_dir);
+            print_pool_status(&config)
+        }
+        PoolCommands::GenerateScripts => {
+            let config = load_pool_config(proj_dir);
+            generate_and_deploy_scripts(&config)
+        }
+        PoolCommands::Setup(args) => run_pool_setup(proj_dir, &args),
     }
 }
 
@@ -142,6 +186,7 @@ fn print_pool_status(config: &ProjectConfig) -> Result<()> {
     println!("{}   H3 image: {}", crate::log::stamp(), H3_IMAGE);
 
     let control_workspace = expand_home_path(&config.pool.remote_workspace);
+    let mut reachable = 0usize;
     for node in &config.pool.nodes {
         let state = read_remote_node_state(node, &config.pool.remote_workspace)
             .ok()
@@ -172,6 +217,7 @@ fn print_pool_status(config: &ProjectConfig) -> Result<()> {
                         node,
                         port
                     );
+                    reachable += 1;
                 } else {
                     println!(
                         "{}   - {}: unreachable (no node-state found)",
@@ -182,6 +228,124 @@ fn print_pool_status(config: &ProjectConfig) -> Result<()> {
             }
         }
     }
+    if reachable == 0 && !config.pool.nodes.is_empty() {
+        println!(
+            "{}   Hint: no H3 node reachable. First-time setup? Run `rea-movie pool setup --proj-dir <proj>` to configure your 1-4 H3 nodes.",
+            crate::log::stamp()
+        );
+    }
+    Ok(())
+}
+
+fn prompt_line(prompt: &str) -> Result<String> {
+    use std::io::{BufRead, Write};
+    print!("{prompt}");
+    std::io::stdout().flush()?;
+    let stdin = std::io::stdin();
+    let mut line = String::new();
+    stdin
+        .lock()
+        .read_line(&mut line)
+        .context("Failed to read stdin (use --nodes/--base-port flags for non-interactive setup)")?;
+    Ok(line.trim().to_string())
+}
+
+fn stdin_is_tty() -> bool {
+    #[cfg(unix)]
+    {
+        use std::io::IsTerminal;
+        std::io::stdin().is_terminal()
+    }
+    #[cfg(not(unix))]
+    {
+        false
+    }
+}
+
+fn ssh_check(node: &str) -> bool {
+    Command::new("ssh")
+        .args([
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "ConnectTimeout=3",
+            "-o",
+            "ConnectionAttempts=1",
+        ])
+        .arg(node)
+        .arg("true")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+fn run_pool_setup(proj_dir: &Path, args: &PoolSetupArgs) -> Result<()> {
+    let mut config = load_pool_config(proj_dir);
+
+    let nodes = match &args.nodes {
+        Some(raw) => parse_node_list(raw)?,
+        None => {
+            if !stdin_is_tty() {
+                bail!("No --nodes given and stdin is not a terminal. Example: rea-movie pool setup --nodes h3node1.local,h3node2.local");
+            }
+            println!("{} ==> MiniMax-H3 pool setup (1-4 nodes)", crate::log::stamp());
+            let count_raw = prompt_line("How many H3 nodes [1-4] (default 1)? ")?;
+            let count: usize = if count_raw.trim().is_empty() {
+                1
+            } else {
+                count_raw
+                    .trim()
+                    .parse()
+                    .with_context(|| format!("Invalid node count: {count_raw}"))?
+            };
+            if count == 0 || count > 4 {
+                bail!("Pool supports 1-4 H3 nodes, got {count}");
+            }
+            let mut hosts = Vec::with_capacity(count);
+            for i in 1..=count {
+                let host = prompt_line(&format!("Host {i}/{count} (e.g. h3node{i}.local): "))?;
+                if host.trim().is_empty() {
+                    bail!("Host {i} is empty");
+                }
+                validate_hostname(host.trim())?;
+                hosts.push(host.trim().to_string());
+            }
+            hosts
+        }
+    };
+
+    if let Some(port) = args.base_port {
+        config.pool.base_port = port;
+    }
+    if let Some(ws) = &args.workspace {
+        validate_remote_workspace(ws)?;
+        config.pool.remote_workspace = ws.clone();
+    }
+    config.pool.nodes = nodes;
+
+    if !args.no_check {
+        for node in &config.pool.nodes {
+            if ssh_check(node) {
+                println!("{}   - {node}: SSH OK", crate::log::stamp());
+            } else {
+                println!(
+                    "{}   - {node}: SSH FAILED (passwordless `ssh {node}` must work; continuing anyway, run `pool generate-scripts` after fixing)",
+                    crate::log::stamp()
+                );
+            }
+        }
+    }
+
+    let config_path = proj_dir.join("rea-movie.toml");
+    config.save_to_file(&config_path)?;
+    println!(
+        "{} ==> Pool configured: {} (base_port={}, workspace={}) -> {}",
+        crate::log::stamp(),
+        config.pool.nodes.join(", "),
+        config.pool.base_port,
+        config.pool.remote_workspace,
+        config_path.display()
+    );
     Ok(())
 }
 
@@ -741,5 +905,17 @@ mod tests {
     fn remote_workspace_validation_rejects_traversal() {
         assert!(validate_remote_workspace("~/rea-movie-artifacts").is_ok());
         assert!(validate_remote_workspace("../other").is_err());
+    }
+
+    #[test]
+    fn parse_node_list_accepts_one_to_four() {
+        assert_eq!(parse_node_list("h3node1.local").unwrap(), vec!["h3node1.local"]);
+        assert_eq!(
+            parse_node_list("a.local, b.local ,c.local,d.local").unwrap(),
+            vec!["a.local", "b.local", "c.local", "d.local"]
+        );
+        assert!(parse_node_list("").is_err());
+        assert!(parse_node_list("a,b,c,d,e").is_err());
+        assert!(parse_node_list("bad host!").is_err());
     }
 }

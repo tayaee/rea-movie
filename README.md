@@ -11,7 +11,12 @@ rea-movie --version
 
 ## Requirements
 
-- H3 render node: passwordless SSH access is required (`ssh spark1.local` must work with no password prompt). Nodes and base port are set in `rea-movie.toml` under `[pool]` (`nodes`, `base_port`). Alternatively, point directly at an H3 server with `REA_MOVIE_H3_ENDPOINT=http://<host>:<port>` (optional: `REA_MOVIE_H3_ENGINE=fl2va|ref2va`).
+- H3 render nodes: 1-4 machines running the H3 server. First-time setup asks for them:
+  `rea-movie pool --proj-dir <proj> setup` (or `--nodes h1,h2`). Passwordless SSH is
+  required (`ssh <node>` must work with no password prompt). Nodes and base port are
+  stored per-project in `rea-movie.toml` under `[pool]` (`nodes`, `base_port`).
+  Alternatively, point directly at an H3 server with `REA_MOVIE_H3_ENDPOINT=http://<host>:<port>`
+  (optional: `REA_MOVIE_H3_ENGINE=fl2va|ref2va`).
 - Screenplay / prompt generation: `export MINIMAX_API_KEY=...` (MiniMax-M3 vision model) must be set. Without it, prompts fall back to a local template instead of AI-generated direction.
 
 ## Default paths (zero config)
