@@ -35,10 +35,10 @@ pub enum Commands {
 
 #[derive(Debug, Args)]
 pub struct SeriesWatchArgs {
-    /// Episode video files or directories (default: <out-root>/sources/)
+    /// Episode video files or directories (default: <out-root>/input-details/)
     pub inputs: Vec<String>,
 
-    /// Directory to scan for episode videos (e.g. <root>/sources)
+    /// Directory to scan for episode videos (e.g. <root>/input-details)
     #[arg(long = "source-dir")]
     pub source_dir: Option<PathBuf>,
 

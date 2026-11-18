@@ -11,7 +11,7 @@ mod pool;
 mod render;
 mod scenes;
 mod series_watch;
-// Issue 8: reusable <root>/sources/<source_id>/ cache
+// Issue 8: reusable <root>/input-details/<source_id>/ cache
 mod sources;
 // Issue 11: multilingual external subtitles + proof outputs
 mod subtitles;

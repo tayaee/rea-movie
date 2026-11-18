@@ -383,14 +383,14 @@ fn get_tool_definitions() -> Vec<Value> {
         // Issue 8: MCP tool series_watch
         json!({
             "name": "series_watch",
-            "description": "Lightweight whole-series pre-analysis (ffprobe + 5s keyframes + subtitles, cached in <root>/sources/) that writes <root>/story/world.json, characters.json and timeline-days.md",
+            "description": "Lightweight whole-series pre-analysis (ffprobe + 5s keyframes + subtitles, cached in <root>/input-details/) that writes <root>/story/world.json, characters.json and timeline-days.md",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "inputs": {
                         "type": "array",
                         "items": { "type": "string" },
-                        "description": "Episode video files or directories (default: <out_root>/sources/)"
+                        "description": "Episode video files or directories (default: <out_root>/input-details/)"
                     },
                     "source_dir": {
                         "type": "string",

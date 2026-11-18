@@ -190,7 +190,7 @@ pub fn run_decompile(opts: DecompileOptions) -> Result<PathBuf> {
         }
     }
 
-    // Issue 8: per-source cache at <root>/sources/<source_id>/ (probe, scene
+    // Issue 8: per-source cache at <root>/input-details/<source_id>/ (probe, scene
     // cuts, subtitles, anchor frames, per-span clips). Reused across ranges
     // and projects; disabled for standalone projects outside any root.
     let source_cache = crate::sources::resolve_sources_dir(Some(&proj_dir), Path::new(input_path))

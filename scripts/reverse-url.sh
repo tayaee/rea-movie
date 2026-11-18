@@ -1,20 +1,21 @@
 #!/usr/bin/env bash
-# reverse-url.sh — "<youtube url>을 역공학하여 <dir>에 저장" intake (issue 8: sources/ 캐시 재사용)
+# reverse-url.sh — "<youtube url>을 역공학하여 <dir>에 저장" intake (issue 8: input-details/ 캐시 재사용)
 #
 # 사용법:
 #   ./reverse-url.sh "<youtube-url-또는-playlist>" <output-root> \
 #       [--range 0-120] [--episodes 1,2|1-3] [--offline] [--force] [-- <decompile 추가 인자...>]
 #
 # 동작:
-#   1. 영상 ID별 캐시 폴더 <output-root>/sources/yt-<id>/ 에 720p mp4 + 자막(ko,en)을 받는다.
-#      - 같은 영상 ID가 이미 sources/ 에 있으면 yt-dlp 다운로드를 건너뛰고 재사용한다.
-#      - 구 레이아웃 <output-root>/source/*[<id>].mp4 가 있으면 sources/yt-<id>/ 로 링크해 재사용한다.
+#   1. 영상 ID별 캐시 폴더 <output-root>/input-details/yt-<id>/ 에 720p mp4 + 자막(ko,en)을 받는다.
+#      - 같은 영상 ID가 이미 input-details/ 에 있으면 yt-dlp 다운로드를 건너뛰고 재사용한다.
+#      - 구 레이아웃 <output-root>/input/*[<id>].mp4, <output-root>/source/*[<id>].mp4,
+#        <output-root>/sources/yt-<id>/ 가 있으면 input-details/yt-<id>/ 로 링크해 재사용한다 (레거시 폴백).
 #      - .vtt -> .srt 변환도 결과 .srt 가 이미 있으면 건너뛴다.
-#      - 플레이리스트 목록은 sources/playlists/<list-id>.tsv 에 캐시되어 재실행 시 네트워크 없이 재사용된다.
+#      - 플레이리스트 목록은 input-details/playlists/<list-id>.tsv 에 캐시되어 재실행 시 네트워크 없이 재사용된다.
 #   2. 플레이리스트면 먼저 `rea-movie series-watch` 로 <output-root>/story/{world.json,characters.json,timeline-days.md}
-#      를 확보한다 (이미 있으면 series-watch 가 스킵).
+#      를 확보한다 (이미 series-watch 가 스킵).
 #   3. --episodes 로 지정한 에피소드만(미지정 시 전체) rea-movie decompile (-o <output-root>/h3-projects/<stem>).
-#      decompile 은 <output-root>/sources/<source_id>/ 의 probe/scene_cuts/자막/키프레임/샷 캐시를 재사용한다.
+#      decompile 은 <output-root>/input-details/<source_id>/ 의 probe/scene_cuts/자막/키프레임/샷 캐시를 재사용한다.
 #
 # 환경변수:
 #   REA_MOVIE_BIN  rea-movie 바이너리 경로 (기본: PATH 의 rea-movie)
@@ -82,8 +83,10 @@ fi
 
 mkdir -p "${ROOT}"
 ROOT="$(cd "${ROOT}" && pwd)"
-SRC_DIR="${ROOT}/sources"
-LEGACY_SRC_DIR="${ROOT}/source"
+SRC_DIR="${ROOT}/input-details"
+LEGACY_SRC_DIR="${ROOT}/input"
+OLD_SRC_DIR="${ROOT}/sources"
+OLD_LEGACY_SRC_DIR="${ROOT}/source"
 PROJ_ROOT="${ROOT}/h3-projects"
 mkdir -p "${SRC_DIR}" "${PROJ_ROOT}"
 
@@ -170,7 +173,7 @@ if [[ ${#ENTRIES[@]} -eq 0 ]]; then
 fi
 
 # ------------------------------------------------------------------------------
-# 2. 영상별 sources/yt-<id>/ 캐시 확보 (다운로드 / 레거시 재사용 / vtt->srt)
+# 2. 영상별 input-details/yt-<id>/ 캐시 확보 (다운로드 / 레거시 재사용 / vtt->srt)
 # ------------------------------------------------------------------------------
 VIDEOS=()
 VIDEO_EPS=()
@@ -181,20 +184,42 @@ for entry in "${ENTRIES[@]}"; do
   ep="$(printf '%02d' "$((10#${idx}))")"
 
   video="$(cached_video "${dir}" || true)"
+  # 구버전 폴백: 기존 sources/yt-<id>/ 캐시에 파일이 있으면 재사용
+  if [[ -z "${video}" && "${FORCE}" -eq 0 ]]; then
+    video="$(cached_video "${OLD_SRC_DIR}/yt-${vid}" || true)"
+    if [[ -n "${video}" ]]; then
+      echo "==> [EP${ep}] Reuse legacy sources/ cache: ${video}"
+      mkdir -p "${dir}"
+      lstem="$(basename "${video}")"
+      lstem="${lstem%.*}"
+      for f in "${OLD_SRC_DIR}/yt-${vid}/${lstem}".*; do
+        [[ -e "${f}" ]] || continue
+        ln -sfn "${f}" "${dir}/$(basename "${f}")"
+      done
+      video="$(cached_video "${dir}" || true)"
+      [[ -n "${video}" ]] || video="$(cached_video "${OLD_SRC_DIR}/yt-${vid}" || true)"
+    fi
+  fi
   if [[ -n "${video}" && "${FORCE}" -eq 0 ]]; then
     echo "==> [EP${ep}] Reuse cached source (skip yt-dlp download): ${video}"
   else
     legacy=""
-    if [[ -d "${LEGACY_SRC_DIR}" && "${FORCE}" -eq 0 ]]; then
-      for f in "${LEGACY_SRC_DIR}"/*"[${vid}]".mp4; do
-        [[ -e "${f}" ]] && legacy="${f}" && break
+    legacy_base=""
+    if [[ "${FORCE}" -eq 0 ]]; then
+      for cand_base in "${LEGACY_SRC_DIR}" "${OLD_LEGACY_SRC_DIR}"; do
+        if [[ -d "${cand_base}" ]]; then
+          for f in "${cand_base}"/*"[${vid}]".mp4; do
+            [[ -e "${f}" ]] && legacy="${f}" && legacy_base="${cand_base}" && break
+          done
+        fi
+        [[ -n "${legacy}" ]] && break
       done
     fi
     mkdir -p "${dir}"
     if [[ -n "${legacy}" ]]; then
-      echo "==> [EP${ep}] Reuse legacy source/ download (skip yt-dlp download): ${legacy}"
+      echo "==> [EP${ep}] Reuse legacy input/ download (skip yt-dlp download): ${legacy}"
       lstem="$(basename "${legacy}" .mp4)"
-      for f in "${LEGACY_SRC_DIR}/${lstem}".*; do
+      for f in "${legacy_base}/${lstem}".*; do
         [[ -e "${f}" ]] || continue
         ln -sfn "${f}" "${dir}/$(basename "${f}")"
       done
@@ -280,5 +305,5 @@ for i in "${!VIDEOS[@]}"; do
   fi
 done
 
-echo "==> Done. Sources: ${SRC_DIR}/ | Story: ${ROOT}/story/ | Projects: ${PROJ_ROOT}/ | Results: ${ROOT}/h3-results/"
+echo "==> Done. Input details: ${SRC_DIR}/ | Input: ${LEGACY_SRC_DIR}/ | Story: ${ROOT}/story/ | Projects: ${PROJ_ROOT}/ | Results: ${ROOT}/h3-results/"
 [[ "${FAILED}" -eq 0 ]]

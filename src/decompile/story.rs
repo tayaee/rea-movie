@@ -53,7 +53,7 @@ pub fn load_subtitle_cues(video_path: &str) -> Vec<SubtitleCue> {
 }
 
 /// Parse cues from an explicit `.srt` path (issue 8: may come from the
-/// `<root>/sources/<id>/subtitles/` cache).
+/// `<root>/input-details/<id>/subtitles/` cache).
 pub fn load_subtitle_cues_from(srt_path: &Path) -> Vec<SubtitleCue> {
     let Ok(content) = std::fs::read_to_string(srt_path) else {
         return Vec::new();

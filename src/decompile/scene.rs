@@ -197,7 +197,7 @@ pub fn merge_short_spans(
 }
 
 /// Build shot spans from a known total duration and a scene-cut provider
-/// (issue 8: the provider may serve cuts from `<root>/sources/<id>/scene_cuts.json`).
+/// (issue 8: the provider may serve cuts from `<root>/input-details/<id>/scene_cuts.json`).
 pub fn build_shot_spans_with<F>(
     total_duration: f64,
     range: Option<&str>,

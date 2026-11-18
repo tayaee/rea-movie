@@ -33,7 +33,7 @@ fn path_arg(p: &Path) -> String {
 /// Extract (or reuse) the per-shot reference assets.
 ///
 /// Issue 8: when a [`SourceCache`] is given, every asset is looked up in
-/// `<root>/sources/<id>/` first — anchor frames by timestamp under
+/// `<root>/input-details/<id>/` first — anchor frames by timestamp under
 /// `keyframes/`, clip/audio/contact sheet by span under `shots_cache/` — and
 /// copied instead of re-running ffmpeg. Fresh extractions are stored back
 /// into the cache. Existing project files are kept unless `force`.

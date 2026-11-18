@@ -9,7 +9,7 @@
 #    expert keyword/section (§8 playbook included).
 # 2. (B) One-line E2E on a synthetic multi-cut series video
 #    (A-B-A dialogue + off-screen VO line + sub-4s shot):
-#    series-watch -> decompile (sources/ cache, axis_of_action bible,
+#    series-watch -> decompile (input-details/ cache, axis_of_action bible,
 #    <Picture 1>/<Picture 2> prompts, off-screen no-lip-movement, verbatim) ->
 #    render --smoke --mock-h3 -> assemble --smoke --proof (sub-4s retime,
 #    6-lang .srt + .proof.srt + _proof.mp4 + original-audio default).
@@ -39,12 +39,12 @@ echo "--- [Check 1] skill/README expert documentation coverage ---"
 
 # Each entry: FILE|FIXED-STRING (checked with grep -qF)
 DOC_CHECKS=(
-  # sources/ permanent cache (Issue 8)
+  # input-details/ permanent cache (Issue 8)
   "SKILL|shots_cache"
   "SKILL|index.json"
   "SKILL|scene_cuts.json"
   "SKILL|probe.json"
-  "SKILL|sources/yt-"
+  "SKILL|input-details/yt-"
   # series-watch (Issue 8)
   "SKILL|series-watch"
   "SKILL|series_watch"
@@ -109,13 +109,13 @@ done
 echo "  SKILL.md + README.md keyword coverage: PASS (${#DOC_CHECKS[@]} checks)"
 
 # reverse-url.sh pipeline wiring (static: no network in CI)
-for needle in "sources/yt-" "series-watch" "--episodes" "Reuse cached"; do
+for needle in "input-details/yt-" "series-watch" "--episodes" "Reuse cached"; do
   grep -qF -- "${needle}" "${REVERSE_URL}" || { echo "FAIL: reverse-url.sh missing: ${needle}"; exit 1; }
 done
-echo "  reverse-url.sh sources/ + series-watch + --episodes wiring: PASS"
+echo "  reverse-url.sh input-details/ + series-watch + --episodes wiring: PASS"
 
 # §8 playbook must spell out the 5-step protocol stages
-for needle in "sources/" "series-watch" "axis_of_action" "리버스샷" "<Picture 1>" "Off-screen" "--mock-h3" "6개국어" "4점 세트"; do
+for needle in "input-details/" "series-watch" "axis_of_action" "리버스샷" "<Picture 1>" "Off-screen" "--mock-h3" "6개국어" "4점 세트"; do
   awk '/^## 8\./,/^## 9\./' "${SKILL}" | grep -qF -- "${needle}" || {
     echo "FAIL: §8 playbook missing stage keyword: ${needle}"; exit 1;
   }
@@ -129,8 +129,8 @@ echo "PASS: [Check 1] documentation coverage."
 echo "--- [Check 2] one-line E2E: series-watch -> decompile -> mock-h3 -> proof ---"
 
 ROOT="${TMP_DIR}/series"
-mkdir -p "${ROOT}/sources" "${ROOT}/h3-projects"
-SERIES_VID="${ROOT}/sources/series_ep01.mp4"
+mkdir -p "${ROOT}/input" "${ROOT}/input-details" "${ROOT}/h3-projects"
+SERIES_VID="${ROOT}/input/series_ep01.mp4"
 
 # A-B-A dialogue (red 2s / blue 2s / red 2s) + sub-4s short (green 1.5s) = 7.5s
 ffmpeg -nostdin -v error -y \
@@ -146,7 +146,7 @@ ffmpeg -nostdin -v error -y \
   "${SERIES_VID}"
 
 # Sibling subs: on-screen dialogue + off-screen (VO) line + short-shot button
-cat > "${ROOT}/sources/series_ep01.ko.srt" <<'EOF'
+cat > "${ROOT}/input/series_ep01.ko.srt" <<'EOF'
 1
 00:00:00,300 --> 00:00:01,800
 We have to go now.
@@ -172,7 +172,7 @@ for f in world.json characters.json timeline-days.md; do
 done
 echo "  [2.0] series-watch story/ created: PASS"
 
-# ---- ② decompile: sources/ cache + bibles + prompts ----
+# ---- ② decompile: input-details/ cache + bibles + prompts ----
 echo "  [2.1] decompile..."
 PROJ="${ROOT}/h3-projects/ep01"
 # Media root rule (src/config.rs): <root>/h3-projects/<name> renders/outputs live in
@@ -184,12 +184,12 @@ if grep -q "Warning: no series context" "${TMP_DIR}/dc.log"; then
 fi
 echo "  [2.1a] series context picked up (no warning): PASS"
 
-SRC_CACHE_DIR=$(ls -d "${ROOT}"/sources/*/ | head -1)
+SRC_CACHE_DIR=$(ls -d "${ROOT}"/input-details/*/ | head -1)
 for f in probe.json scene_cuts.json; do
-  [[ -f "${SRC_CACHE_DIR}/${f}" ]] || { echo "FAIL: sources/ cache ${f} missing"; exit 1; }
+  [[ -f "${SRC_CACHE_DIR}/${f}" ]] || { echo "FAIL: input-details/ cache ${f} missing"; exit 1; }
 done
 [[ -d "${SRC_CACHE_DIR}/shots_cache" ]] || { echo "FAIL: shots_cache/ missing"; exit 1; }
-echo "  [2.1b] sources/ cache (probe/scene_cuts/shots_cache): PASS"
+echo "  [2.1b] input-details/ cache (probe/scene_cuts/shots_cache): PASS"
 
 mapfile -t SHOT_DIRS < <(ls -d "${PROJ}"/shots/shot_*/ | sort)
 ((${#SHOT_DIRS[@]} >= 3)) || { echo "FAIL: expected >=3 shots, got ${#SHOT_DIRS[@]}"; exit 1; }

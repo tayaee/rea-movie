@@ -2,7 +2,7 @@
 //!
 //! "Watching" the whole series is not a full decompile. For every episode it
 //! runs ffprobe, samples a keyframe every 5 seconds and loads the subtitles —
-//! all cached under `<root>/sources/<source_id>/` — and writes the series
+//! all cached under `<root>/input-details/<source_id>/` — and writes the series
 //! context that `decompile` expects:
 //!
 //! - `<root>/story/world.json`
@@ -143,8 +143,9 @@ fn scan_dir(dir: &Path, depth: usize, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// Resolve `<root>`: explicit `--out-root`, else the parent of a
-/// `sources/`/`source/` dir, else the root of the first input.
+/// Resolve `<root>`: explicit `--out-root`, else the parent of an
+/// `input-details/`/`input/` (or legacy `sources/`/`source/`) dir, else the
+/// root of the first input.
 fn resolve_root(opts: &SeriesWatchOptions) -> Result<PathBuf> {
     if let Some(root) = opts.out_root {
         return Ok(root.to_path_buf());
@@ -154,7 +155,10 @@ fn resolve_root(opts: &SeriesWatchOptions) -> Result<PathBuf> {
         let name = abs.file_name().and_then(|n| n.to_str());
         if matches!(
             name,
-            Some(sources::SOURCES_DIR_NAME) | Some(sources::LEGACY_SOURCE_DIR_NAME)
+            Some(sources::SOURCES_DIR_NAME)
+                | Some(sources::LEGACY_SOURCE_DIR_NAME)
+                | Some(sources::OLD_SOURCES_DIR_NAME)
+                | Some(sources::OLD_LEGACY_SOURCE_DIR_NAME)
         ) {
             if let Some(parent) = abs.parent() {
                 return Ok(parent.to_path_buf());
@@ -182,6 +186,8 @@ fn collect_videos(opts: &SeriesWatchOptions, root: &Path) -> Vec<PathBuf> {
     if targets.is_empty() {
         targets.push(root.join(sources::SOURCES_DIR_NAME));
         targets.push(root.join(sources::LEGACY_SOURCE_DIR_NAME));
+        targets.push(root.join(sources::OLD_SOURCES_DIR_NAME));
+        targets.push(root.join(sources::OLD_LEGACY_SOURCE_DIR_NAME));
     }
     for target in targets {
         if target.is_dir() {
@@ -607,7 +613,7 @@ pub fn run_series_watch(opts: SeriesWatchOptions) -> Result<SeriesWatchReport> {
     let videos = collect_videos(&opts, &root);
     if videos.is_empty() {
         anyhow::bail!(
-            "No episode videos found (looked in inputs/--source-dir or {}/sources/)",
+            "No episode videos found (looked in inputs/--source-dir or {}/input-details/)",
             root.display()
         );
     }

@@ -132,12 +132,12 @@ rea-movie render --proj-dir <proj> --smoke --mock-h3 --shot 0005  # 단일 샷
 ./scripts/reverse-url.sh "<playlist-url>" ~/rea-movie-artifacts --episodes 1,2 --offline
 ./scripts/reverse-url.sh "<playlist-url>" ~/rea-movie-artifacts --episodes 1-3 --force
 ```
-1. yt-dlp로 720p mp4 + 자막(ko,en)을 `<output-root>/sources/yt-<id>/`에 다운로드 (플레이리스트면 자동 전체).
-   - 동일 영상 ID가 이미 `sources/`에 있으면 yt-dlp 다운로드를 건너뛰고 재사용 (중복 다운로드 방지).
-   - 구 레이아웃 `<output-root>/source/*[<id>].mp4`가 있으면 `sources/yt-<id>/`로 링크해 재사용 (레거시 폴백).
+1. yt-dlp로 720p mp4 + 자막(ko,en)을 `<output-root>/input-details/yt-<id>/`에 다운로드 (플레이리스트면 자동 전체).
+   - 동일 영상 ID가 이미 `input-details/`에 있으면 yt-dlp 다운로드를 건너뛰고 재사용 (중복 다운로드 방지).
+   - 구 레이아웃 `<output-root>/input/*[<id>].mp4`, `<output-root>/source/*[<id>].mp4`, `<output-root>/sources/yt-<id>/`에 기존 파일이 있으면 `input-details/yt-<id>/`로 링크해 재사용 (레거시 폴백).
    - 자막 vtt → sibling `.srt` 변환도 `.srt`가 이미 있으면 건너뜀.
-   - 플레이리스트 목록은 `sources/playlists/<list-id>.tsv`에 캐시되어 재실행 시 네트워크 없이 재사용.
-2. decompile은 `<output-root>/sources/<source_id>/`의 probe/scene_cuts/자막/키프레임/샷 캐시를 재사용
+   - 플레이리스트 목록은 `input-details/playlists/<list-id>.tsv`에 캐시되어 재실행 시 네트워크 없이 재사용.
+2. decompile은 `<output-root>/input-details/<source_id>/`의 probe/scene_cuts/자막/키프레임/샷 캐시를 재사용
    (동일 소스 재실행 시 느린 `select='gt(scene,0.14)'` 씬 감지 0초 스킵, 샷 에셋 원자적 복사).
 3. 플레이리스트면 decompile 전에 먼저 `rea-movie series-watch --out-root <root>`를 실행하여
    `<root>/story/{world.json,characters.json,timeline-days.md}`를 선행 확보 (이미 있으면 스킵).
@@ -180,7 +180,7 @@ M3 1회/편 요약(샷틀 + 자막 전체)으로 초안을 만들고 사람이 �
 ```bash
 # 시리즈 전체 선행 분석 (가벼운 프로브: ffprobe + 5초 간격 키프레임 + 자막 파싱)
 rea-movie series-watch --out-root <root> <episode1.mp4> <episode2.mp4> ...
-rea-movie series-watch --out-root <root> --source-dir <root>/sources --offline
+rea-movie series-watch --out-root <root> --source-dir <root>/input-details --offline
 rea-movie series-watch --out-root <root> --interval 5.0 --force  # story/ 강제 재생성
 ```
 
@@ -189,7 +189,7 @@ rea-movie series-watch --out-root <root> --interval 5.0 --force  # story/ 강제
 - `MINIMAX_API_KEY`가 있으면 M3 1회 호출로 세계관/캐릭터/타임라인 초안 요약 (실패 시 오프라인 폴백).
 - `story/{world.json,characters.json,timeline-days.md}`가 이미 존재하면 `--force`가 아닐 때 스킵.
 - MCP 도구 `series_watch`로도 호출 가능 (§5 참조).
-- `sources/` 영구 캐시: `<root>/sources/<source_id>/{video.mp4,probe.json,scene_cuts.json,keyframes/,shots_cache/,subtitles/}`
+- `input-details/` 영구 캐시: `<root>/input-details/<source_id>/{video.mp4,probe.json,scene_cuts.json,keyframes/,shots_cache/,subtitles/}`
   - `source_id`: YouTube는 `yt-<11자리ID>`, 로컬 파일은 크기+앞/뒤 1MiB FNV-1a 해시 `file-<fp>`.
   - `index.json`에 `(path,size,mtime)` 매핑, `scene_cuts.json`은 구간 병합(`insert`)으로 `--range` 재실행 시 재감지 스킵.
   - `shots_cache/<start>_<end>/`에 `original_clip.mp4`/`original_audio.wav`/`contact_sheet.jpg` 보관, `--force` 아니면 원자적 복사 재사용.
@@ -357,13 +357,13 @@ rea-movie pool generate-scripts
 ### 8-0. 1줄 요청 5단계 자율 프로토콜
 
 ```
-① sources/ 캐시 확인 & series-watch → ② 씬 바이블 검수 → ③ 델타·발화 검수 →
+① input-details/ 캐시 확인 & series-watch → ② 씬 바이블 검수 → ③ 델타·발화 검수 →
 ④ Smoke 렌더 & 조립 → ⑤ _compare.mp4 + 4점 세트 대조 검수
 ```
 
-**① `sources/` 캐시 확인 & `series-watch` 선행 분석.**
-URL이면 `./scripts/reverse-url.sh "<url>" <root> [--episodes ...]`로 `sources/yt-<id>/` 캐시를 확보한다
-(이미 있으면 다운로드 스킵). 로컬 파일이면 decompile이 `sources/file-<fp>/`에 자동 캐시한다.
+**① `input-details/` 캐시 확인 & `series-watch` 선행 분석.**
+URL이면 `./scripts/reverse-url.sh "<url>" <root> [--episodes ...]`로 `input-details/yt-<id>/` 캐시를 확보한다
+(이미 있으면 다운로드 스킵). 로컬 파일이면 decompile이 `input-details/file-<fp>/`에 자동 캐시한다.
 플레이리스트·시리즈물은 decompile 전에 반드시
 `rea-movie series-watch --out-root <root>`로 `<root>/story/{world.json,characters.json,timeline-days.md}`를 확보한다
 (이미 있으면 스킵). 사용자가 일부만 제공하겠다고 명시 확인한 경우에만 그 범위로 진행하며,

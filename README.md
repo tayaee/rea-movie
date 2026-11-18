@@ -43,26 +43,26 @@ One-line request agents handle autonomously (see `skills/rea-movie/SKILL.md` §8
 
 ```bash
 claude "Reverse-engineer <youtube_url/mp4> into <dir>"
-# Agent protocol: ① sources/ cache + series-watch → ② scene-bible axis/A-B-A check →
+# Agent protocol: ① input-details/ cache + series-watch → ② scene-bible axis/A-B-A check →
 # ③ <Picture 1>→<Picture 2> delta + on/off-screen check → ④ smoke render & assemble →
 # ⑤ _compare.mp4 + 4-point set (ko prompt + h3 prompt + render + first_frame) review
 ```
 
 ## Features (Issues 8–11)
 
-### `sources/` permanent cache + `series-watch` pre-analysis (Issue 8)
+### `input-details/` permanent cache + `series-watch` pre-analysis (Issue 8)
 
-- Reusable assets live once under `<root>/sources/<source_id>/`:
+- Reusable assets live once under `<root>/input-details/<source_id>/`:
   `video.mp4`, `probe.json`, `scene_cuts.json`, `subtitles/`, `keyframes/`,
   `shots_cache/<start>_<end>/{original_clip.mp4,original_audio.wav,contact_sheet.jpg}`.
   Repeat decompiles skip slow `select='gt(scene,0.14)'` detection and copy shot assets atomically.
 - `source_id`: YouTube → `yt-<11-char-id>`; local file → `file-<FNV-1a(size+head/tail 1MiB)>`;
-  indexed in `sources/index.json`, with legacy `<root>/source/` auto-detected.
+  indexed in `input-details/index.json` (pure input videos in `<root>/input/`; legacy `<root>/sources/` and `<root>/source/` auto-detected).
 - `rea-movie series-watch --out-root <root> [episodes...]` (also MCP tool `series_watch`)
   pre-analyzes whole series (ffprobe + 5s keyframes + subtitle parsing) into
   `<root>/story/{world.json,characters.json,timeline-days.md}` — deterministic offline
   default, one-shot MiniMax-M3 summary when `MINIMAX_API_KEY` is set.
-- `scripts/reverse-url.sh` ties it together: `sources/yt-<id>/` caching with yt-dlp
+- `scripts/reverse-url.sh` ties it together: `input-details/yt-<id>/` caching with yt-dlp
   skip, `.vtt`→`.srt` skip-if-exists, `series-watch` first for playlists,
   `--episodes 1,2` / `1-3` selective decompile.
 

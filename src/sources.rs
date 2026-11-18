@@ -1,4 +1,4 @@
-//! Issue 8: reusable per-source cache under `<root>/sources/<source_id>/`.
+//! Issue 8: reusable per-source cache under `<root>/input-details/<source_id>/`.
 //!
 //! A source (a local video file or a downloaded YouTube video) is analysed
 //! once; every artifact that does not depend on the project (ffprobe metadata,
@@ -8,16 +8,17 @@
 //!
 //! Layout:
 //! ```text
-//! <root>/sources/index.json                  input -> source_id map
-//! <root>/sources/<source_id>/video.<ext>     symlink to the original (when outside)
-//! <root>/sources/<source_id>/probe.json      ffprobe metadata
-//! <root>/sources/<source_id>/scene_cuts.json scene-cut timestamps per scanned segment
-//! <root>/sources/<source_id>/subtitles/      cached / extracted .srt files
-//! <root>/sources/<source_id>/keyframes/      probe_t<ms>.jpg (5s grid), anchor_t<ms>.jpg
-//! <root>/sources/<source_id>/shots_cache/<start_ms>_<end_ms>/  clip, audio, contact sheet
+//! <root>/input-details/index.json                  input -> source_id map
+//! <root>/input-details/<source_id>/video.<ext>     symlink to the original (when outside)
+//! <root>/input-details/<source_id>/probe.json      ffprobe metadata
+//! <root>/input-details/<source_id>/scene_cuts.json scene-cut timestamps per scanned segment
+//! <root>/input-details/<source_id>/subtitles/      cached / extracted .srt files
+//! <root>/input-details/<source_id>/keyframes/      probe_t<ms>.jpg (5s grid), anchor_t<ms>.jpg
+//! <root>/input-details/<source_id>/shots_cache/<start_ms>_<end_ms>/  clip, audio, contact sheet
 //! ```
-//! The legacy `<root>/source/` directory (old `reverse-url.sh` layout) is
-//! still recognised when resolving the root from an input path.
+//! Pure input videos live in `<root>/input/`. The legacy `<root>/sources/` and
+//! `<root>/source/` directories (old `reverse-url.sh` layout) are still
+//! recognised when resolving the root from an input path.
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -26,8 +27,10 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-pub const SOURCES_DIR_NAME: &str = "sources";
-pub const LEGACY_SOURCE_DIR_NAME: &str = "source";
+pub const SOURCES_DIR_NAME: &str = "input-details";
+pub const LEGACY_SOURCE_DIR_NAME: &str = "input";
+pub const OLD_SOURCES_DIR_NAME: &str = "sources";
+pub const OLD_LEGACY_SOURCE_DIR_NAME: &str = "source";
 /// ffmpeg `select='gt(scene,X)'` threshold used by scene detection.
 pub const SCENE_THRESHOLD: f64 = 0.14;
 const VIDEO_EXTS: &[&str] = &["mp4", "mkv", "mov", "webm", "m4v", "avi"];
@@ -47,16 +50,22 @@ fn log(msg: &str) {
     println!("{} [sources] {}", crate::log::stamp(), msg);
 }
 
-/// Series root derived from an input path located in `<root>/sources/<id>/`,
-/// `<root>/sources/` or the legacy `<root>/source/`.
+/// Series root derived from an input path located in `<root>/input-details/<id>/`,
+/// `<root>/input-details/`, `<root>/input/`, or the legacy `<root>/sources/<id>/`
+/// and `<root>/source/` layouts.
 pub fn root_from_input(input: &Path) -> Option<PathBuf> {
     let abs = absolute(input);
     let mut cur = abs.parent();
-    // Look at most two levels up: sources/<id>/file or source/file.
+    // Look at most two levels up: input-details/<id>/file or input/file
+    // (plus legacy sources/<id>/file and source/file).
     for _ in 0..2 {
         let dir = cur?;
         let name = dir.file_name().and_then(|n| n.to_str());
-        if name == Some(SOURCES_DIR_NAME) || name == Some(LEGACY_SOURCE_DIR_NAME) {
+        if name == Some(SOURCES_DIR_NAME)
+            || name == Some(LEGACY_SOURCE_DIR_NAME)
+            || name == Some(OLD_SOURCES_DIR_NAME)
+            || name == Some(OLD_LEGACY_SOURCE_DIR_NAME)
+        {
             return dir.parent().map(|p| p.to_path_buf());
         }
         cur = dir.parent();
@@ -64,7 +73,7 @@ pub fn root_from_input(input: &Path) -> Option<PathBuf> {
     None
 }
 
-/// Resolve `<root>/sources/` for a decompile.
+/// Resolve `<root>/input-details/` for a decompile.
 ///
 /// Priority: `REA_MOVIE_SOURCES_DIR` env → series root of a
 /// `<root>/h3-projects/<name>` project → root derived from the input path.
@@ -391,7 +400,7 @@ impl SceneCutsCache {
 pub enum AssetOutcome {
     /// Target already present in the project (skip-by-default).
     Existing,
-    /// Copied from `<root>/sources/<id>/`.
+    /// Copied from `<root>/input-details/<id>/`.
     Reused,
     /// Freshly extracted (and stored into the cache).
     Extracted,
@@ -824,6 +833,14 @@ mod tests {
     #[test]
     fn test_root_from_input_new_and_legacy() {
         assert_eq!(
+            root_from_input(Path::new("/r/input-details/yt-abc/ep.mp4")),
+            Some(PathBuf::from("/r"))
+        );
+        assert_eq!(
+            root_from_input(Path::new("/r/input/ep.mp4")),
+            Some(PathBuf::from("/r"))
+        );
+        assert_eq!(
             root_from_input(Path::new("/r/sources/yt-abc/ep.mp4")),
             Some(PathBuf::from("/r"))
         );
@@ -881,7 +898,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let video = root.path().join("clip.mp4");
         std::fs::write(&video, b"not really a video but stable bytes").unwrap();
-        let sources = root.path().join("sources");
+        let sources = root.path().join("input-details");
 
         let c1 = SourceCache::open(&sources, &video).unwrap();
         assert!(c1.source_id.starts_with("file-"));
