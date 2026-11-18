@@ -38,6 +38,12 @@ description: Reverse-engineer any movie into reproducible MiniMax-H3 multi-shot 
 
 ## 2. CLI 기본 명령어 및 실행 흐름
 
+**역할 분담**: 판단·협상·품질 게이트는 에이전트(스킬)가, 반복 실행은 바이너리가 맡는다.
+모호한 입력(URL, "원본처럼"), 바이블 검수, 장애 대응(§7)은 스킬로.
+정해진 단일 동작(특정 샷 재렌더, assemble, pool status), 스크립트·CI·회귀는 바이너리 직접 실행.
+에이전트가 바이너리 작업을 손으로 대신하지 말 것 (66개 프롬프트 수기 편집 금지 —
+`customize apply`, `./run.sh <shot>` 사용).
+
 ### A. 영화 역공학 (Decompile)
 입력 영상을 분석하여 샷별 에셋 및 프롬프트 프로젝트를 생성합니다:
 ```bash
