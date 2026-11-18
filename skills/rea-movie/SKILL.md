@@ -9,6 +9,28 @@ description: Reverse-engineer any movie into reproducible MiniMax-H3 multi-shot 
 
 ---
 
+## 0. Quickstart (설치부터 1줄 역공학까지)
+
+```bash
+# 1. 스킬 & CLI 도구 설치 (1줄) — 로컬 소스 빌드 시: ./install-dev.sh
+curl -fsSL https://raw.githubusercontent.com/tayaee/rea-movie/main/install.sh | sh
+
+# 2. H3 렌더 노드 셋업 (1줄) — 1~4대 노드 등록 (대화형은 --nodes 생략)
+rea-movie pool setup --nodes spark1.local,spark2.local
+
+# 3. 셋업 상태 검사 (1줄) — 바이너리 버전 및 H3 서버 풀 헬스체크
+rea-movie --version && rea-movie pool status
+
+# 4. Claude 실행 (1줄) — MiniMax-M3 비전/연출 API 키 설정 후 시작
+export MINIMAX_API_KEY="<your-minimax-api-key>" && claude
+
+# 5. 역공학 예제 프롬프트 (1줄) — <source: 파일|폴더|YouTube URL|Playlist> [series-name]
+> "/rea-movie https://www.youtube.com/playlist?list=PLqqQvcAR1H0lvElJjtKv5x6qFq8NPP-fw one-fine-week --episodes 1,2 --range 0-120"
+# (또는 자연어: "./one-fine-week/ 폴더를 one-fine-week 시리즈로 역공학하여 ~/rea-movie-artifacts 에 저장해")
+```
+
+---
+
 ## 1. 프로젝트 핵심 아키텍처 및 철학
 
 - **목표**: 임의의 영화/영상(`mp4`, `mkv`)을 입력받아 샷 분할, 앵커 프레임(`first_frame.jpg`, `last_frame.jpg`), 타임스탬프 번인 스토리보드(`contact_sheet.jpg`), 한국어 연출서(`prompt.ko.md`), MiniMax-H3 영문 프롬프트(`prompt.h3.txt`)를 생성하고, DGX Spark 서버 풀에서 각 샷을 렌더링한 후 최종 영화 및 좌우 1:1 동시 비교 영상(`_compare.mp4`)으로 조립한다.
