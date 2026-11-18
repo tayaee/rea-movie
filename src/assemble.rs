@@ -374,6 +374,125 @@ fn probe_video_fps(path: &Path) -> Option<f64> {
     trimmed.parse::<f64>().ok()
 }
 
+fn atempo_chain_filter(ratio: f64) -> String {
+    // Issue 9: decompose a tempo ratio into chained atempo= filters (each
+    // supports 0.5x-100x in practice, 0.5x-2.0x safely). Ratio > 1 means
+    // speed-up (4.0s render -> 2.0s target = 2.0x).
+    if !ratio.is_finite() || ratio <= 0.0 {
+        return "atempo=1.0".to_string();
+    }
+    let mut r = ratio;
+    let mut parts = Vec::new();
+    while r > 2.0 {
+        parts.push(format!("atempo={:.6}", 2.0));
+        r /= 2.0;
+    }
+    while r < 0.5 {
+        parts.push(format!("atempo={:.6}", 0.5));
+        r /= 0.5;
+    }
+    parts.push(format!("atempo={:.6}", r));
+    parts.join(",")
+}
+
+/// Issue 9: retime a rendered H3 clip (always >= 4.0s) down to the timeline
+/// target duration while preserving the full 0..render_dur range.
+///
+/// The H3 server renders `clamp(duration, 4.0, 15.0)` seconds, so for a
+/// 1.5-2.5s shot `frame_indices=[0,-1]` maps t=0.0s to first_frame and
+/// t=render_dur to last_frame. A plain `-t target` trim would discard the
+/// entire last-frame convergence section. Instead the video timestamps are
+/// remapped with `setpts=(target/render)*PTS` so both anchors survive in
+/// the assembled output, and audio is sped up with an atempo chain then
+/// trimmed/padded to exactly `target_dur`.
+fn retime_render_clip(input_path: &Path, out_path: &Path, duration: f64) -> Result<()> {
+    if let Some(parent) = out_path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to create directory: {:?}", parent))?;
+    }
+
+    let file_stem = out_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("retimed");
+    let temp_name = format!(".{}_{}.tmp.mp4", file_stem, std::process::id());
+    let temp_out = out_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join(temp_name);
+
+    let fps = probe_video_fps(input_path).unwrap_or(24.0);
+    let frames = (duration * fps).round().max(1.0);
+    let trim_dur = frames / fps;
+
+    let render_dur = probe_video_duration(input_path).unwrap_or(duration.max(0.1));
+    let render_dur = if render_dur > 0.0 {
+        render_dur
+    } else {
+        duration.max(0.1)
+    };
+    let factor = trim_dur / render_dur;
+    let video_filter = format!("setpts={:.6}*PTS,fps={}", factor, fps);
+    let has_audio = has_audio_stream(input_path);
+
+    let mut cmd = Command::new("ffmpeg");
+    cmd.args(["-nostdin", "-v", "error", "-y", "-i"])
+        .arg(input_path)
+        .args(["-filter:v", &video_filter]);
+    let audio_filter;
+    if has_audio {
+        let ratio = render_dur / trim_dur;
+        // Note: no `apad` here — `apad` (infinite silence source) deadlocks
+        // with `-preset veryfast` on some ffmpeg builds. `atrim` alone caps
+        // the sped-up audio; `-t` caps the container.
+        audio_filter = format!("{},atrim=0:{:.6}", atempo_chain_filter(ratio), trim_dur);
+        cmd.args(["-filter:a", &audio_filter]);
+    }
+    cmd.args([
+        "-t",
+        &format!("{:.6}", trim_dur),
+        "-c:v",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-crf",
+        "18",
+        "-pix_fmt",
+        "yuv420p",
+        "-c:a",
+        "aac",
+        "-ar",
+        "32000",
+        "-ac",
+        "2",
+        "-f",
+        "mp4",
+    ])
+    .arg(&temp_out);
+
+    let output = cmd
+        .output()
+        .with_context(|| format!("Failed to run ffmpeg to retime {:?}", input_path))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let _ = fs::remove_file(&temp_out);
+        bail!(
+            "ffmpeg retime failed for {:?}: {}",
+            input_path,
+            stderr.trim()
+        );
+    }
+
+    if out_path.exists() {
+        fs::remove_file(out_path)?;
+    }
+    fs::rename(&temp_out, out_path)
+        .with_context(|| format!("Failed to rename {:?} to {:?}", temp_out, out_path))?;
+
+    Ok(())
+}
+
 fn trim_video_clip(input_path: &Path, out_path: &Path, duration: f64) -> Result<()> {
     if let Some(parent) = out_path.parent() {
         fs::create_dir_all(parent)
@@ -446,7 +565,9 @@ fn prepare_effective_shots(shots: &[AssembleShot], output_dir: &Path) -> Result<
         let mut eff = shot.clone();
 
         if let Some(target_dur) = shot.duration {
-            // 1. Render clip trimming if actual duration > target_dur + 0.08
+            // 1. Render clip retiming (issue 9): the H3 server always renders
+            // >= 4.0s, so the full 0..render_dur range reaches last_frame.
+            // Retime (not plain trim) so both anchors survive in target_dur.
             if let Some(render_dur) = probe_video_duration(&shot.render_video) {
                 if render_dur > target_dur + 0.08 {
                     let trim_render_path = trim_dir.join(format!("{}.mp4", shot.shot_id));
@@ -455,7 +576,7 @@ fn prepare_effective_shots(shots: &[AssembleShot], output_dir: &Path) -> Result<
                             .map(|m| m.len() > 0)
                             .unwrap_or(false);
                     if !is_valid {
-                        trim_video_clip(&shot.render_video, &trim_render_path, target_dur)?;
+                        retime_render_clip(&shot.render_video, &trim_render_path, target_dur)?;
                     }
                     eff.render_video = trim_render_path;
                 }
@@ -819,6 +940,31 @@ fn build_single_shot_compare(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_atempo_chain_covers_large_ratios() {
+        assert_eq!(atempo_chain_filter(2.0), "atempo=2.000000");
+        assert_eq!(atempo_chain_filter(4.0), "atempo=2.000000,atempo=2.000000");
+        assert_eq!(atempo_chain_filter(1.0), "atempo=1.000000");
+    }
+
+    #[test]
+    fn test_retime_render_clip_matches_target_duration() {
+        let tmp_dir = tempfile::tempdir().expect("create temp dir");
+        let raw_video = tmp_dir.path().join("raw4s.mp4");
+        if !create_test_video(&raw_video, 4.0) {
+            eprintln!("Skipping test: ffmpeg lavfi not available");
+            return;
+        }
+        let out = tmp_dir.path().join("retimed.mp4");
+        retime_render_clip(&raw_video, &out, 2.0).expect("retime render clip");
+        let dur = probe_video_duration(&out).expect("probe retimed");
+        assert!(
+            (dur - 2.0).abs() < 0.25,
+            "Retimed duration should be ~2.0s, got {}",
+            dur
+        );
+    }
 
     #[test]
     fn test_shot_number_extraction() {

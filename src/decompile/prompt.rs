@@ -20,6 +20,56 @@ pub struct PromptGenContext<'a> {
     pub subtitle_lines: &'a [String],
     pub has_subtitle_track: bool,
     pub custom_mod: Option<&'a str>,
+    // Issue 9: anchor frames, scene bible, series context and anchor kind.
+    pub first_frame_path: Option<&'a Path>,
+    pub last_frame_path: Option<&'a Path>,
+    pub scene_bible: Option<&'a crate::scenes::SceneBible>,
+    pub series_world_summary: Option<&'a str>,
+    pub anchor: &'a str,
+}
+
+/// Expected H3 reference header for an anchor kind (issue 9).
+pub fn reference_line_for(anchor: &str, shot_index: usize) -> String {
+    match anchor {
+        "first_and_last" => format!(
+            "For the target video, at 0.00 seconds into the target video, <Picture 1> and <Picture 2> (from [Shot {}]) are fully referenced.",
+            shot_index
+        ),
+        "first_only" | "ref_only" => format!(
+            "For the target video, at 0.00 seconds into the target video, <Picture 1> (from [Shot {}]) is fully referenced.",
+            shot_index
+        ),
+        "none" => format!(
+            "For the target video, at 0.00 seconds into the target video, generate Shot {} from the description below.",
+            shot_index
+        ),
+        _ => format!(
+            "For the target video, at 0.00 seconds into the target video, <Picture 1> and <Picture 2> (from [Shot {}]) are fully referenced.",
+            shot_index
+        ),
+    }
+}
+
+/// Normalize an M3-generated H3 prompt so the anchor reference header is
+/// guaranteed at the top (issue 9). Existing correct headers are kept;
+/// a stale/mismatched first line is replaced; otherwise the expected
+/// header is prepended.
+pub fn ensure_h3_reference_header(h3: &str, shot_index: usize, anchor: &str) -> String {
+    let expected = reference_line_for(anchor, shot_index);
+    let trimmed = h3.trim();
+    if trimmed.starts_with(&expected) {
+        return h3.to_string();
+    }
+    let mut lines: Vec<&str> = trimmed.lines().collect();
+    // Skip leading blank lines for the header check.
+    let first_idx = lines.iter().position(|l| !l.trim().is_empty()).unwrap_or(0);
+    if let Some(first) = lines.get(first_idx) {
+        if first.trim_start().starts_with("For the target video") {
+            lines[first_idx] = expected.as_str();
+            return lines.join("\n");
+        }
+    }
+    format!("{}\n\n{}", expected, trimmed)
 }
 
 // Section 3.2 & Section 3.3: Base preservation and idempotent block injection
@@ -121,9 +171,11 @@ pub fn generate_prompts(
 
     // Section 3.2: Apply customization blocks to bases, then prepend the
     // scene continuity block (idempotent: old scene block is replaced).
+    // Issue 9: prefer the context-carried bible, fall back to the explicit arg.
     let mut final_ko = crate::customize::apply_to_ko(&base_ko, blocks);
     let mut final_h3 = crate::customize::apply_to_h3(&base_h3, blocks);
-    if let Some(bible) = scene_bible {
+    let effective_bible = ctx.scene_bible.or(scene_bible);
+    if let Some(bible) = effective_bible {
         final_ko = crate::scenes::prepend_scene_block(
             &final_ko,
             &crate::scenes::format_scene_block_ko(bible),
@@ -446,17 +498,139 @@ fn build_dialogue_lines(ctx: &PromptGenContext) -> (String, String) {
     }
 }
 
+fn encode_image_data_uri(path: &Path) -> Result<Option<String>> {
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let bytes = std::fs::read(path)?;
+    if bytes.is_empty() {
+        return Ok(None);
+    }
+    let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &bytes);
+    Ok(Some(format!("data:image/jpeg;base64,{}", b64)))
+}
+
+fn format_scene_bible_for_m3(bible: &crate::scenes::SceneBible) -> String {
+    let mut parts = vec![format!(
+        "Scene {} ({:.1}s-{:.1}s, {} shots):",
+        bible.scene_id, bible.start_sec, bible.end_sec, bible.shot_count
+    )];
+    if !bible.location.is_empty() {
+        parts.push(format!("Location: {}.", bible.location));
+    }
+    if !bible.time_of_day.is_empty() {
+        parts.push(format!("Time of day: {}.", bible.time_of_day));
+    }
+    for ch in &bible.characters {
+        let mut desc = format!("Person {}: appearance [{}]", ch.id, ch.appearance);
+        if !ch.wardrobe.is_empty() {
+            desc.push_str(&format!("; wardrobe [{}]", ch.wardrobe));
+        }
+        parts.push(desc);
+    }
+    if !bible.spatial_map.is_empty() {
+        parts.push(format!("Spatial layout: {}.", bible.spatial_map));
+    }
+    if !bible.eyeline_notes.is_empty() {
+        parts.push(format!("Eyeline grammar: {}.", bible.eyeline_notes));
+    }
+    if !bible.dialogue_flow.is_empty() {
+        parts.push(format!("Dialogue flow: {}.", bible.dialogue_flow));
+    }
+    if !bible.lighting.is_empty() {
+        parts.push(format!("Lighting: {}.", bible.lighting));
+    }
+    parts.join("\n")
+}
+
 fn try_minimax_m3_api(ctx: &PromptGenContext, api_key: &str) -> Result<(String, String)> {
-    let img_bytes = std::fs::read(ctx.contact_sheet_path)?;
-    let base64_img = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &img_bytes);
-    let data_uri = format!("data:image/jpeg;base64,{}", base64_img);
+    let contact_uri = encode_image_data_uri(ctx.contact_sheet_path)?
+        .context("contact_sheet.jpg is missing or empty")?;
+    let first_uri = ctx
+        .first_frame_path
+        .and_then(|p| encode_image_data_uri(p).ok())
+        .flatten();
+    let last_uri = ctx
+        .last_frame_path
+        .and_then(|p| encode_image_data_uri(p).ok())
+        .flatten();
 
     let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(180))
         .build()?;
 
     let (ko_dlg, h3_dlg) = build_dialogue_lines(ctx);
-    let system_prompt = "You are a professional film reverse-engineering director and prompt engineer for MiniMax-H3 video generation. Analyze the provided contact sheet image (1-second intervals with burned-in timestamps). Output valid JSON with two fields: 'prompt_ko' and 'prompt_h3'. prompt_h3 must adhere to the MiniMax-H3 schema with 'integrated_multimodal_description:', 'overall_soundscape:', and 'non_diegetic_music:'. Keep the exact <d>[Language] ...</d> dialogue tag provided by the user.";
+    let system_prompt = "You are a professional film reverse-engineering director and prompt engineer for MiniMax-H3 video generation. Analyze the provided storyboard images and output valid JSON with two fields: 'prompt_ko' and 'prompt_h3'. prompt_h3 must adhere to the MiniMax-H3 schema with 'integrated_multimodal_description:', 'overall_soundscape:', and 'non_diegetic_music:'. Keep the exact <d>[Language] ...</d> dialogue tag provided by the user. The shot body itself must use the scene bible person IDs (S1, S2, ...) and eyeline directions with 100% consistency. NEGATIVE RULES (never describe these): broadcast station logos (e.g. VA logo), watermarks, burned-in timestamp numbers, hardcoded subtitle text, or any on-screen overlay graphics. Describe only the underlying cinematic scene without visual noise.";
+    let anchor = if ctx.anchor.is_empty() {
+        "first_and_last"
+    } else {
+        ctx.anchor
+    };
+
+    let mut delta_instruction = String::from(
+        "Anchor trajectory: <Picture 1> (first_frame.jpg) shows the opening composition at 0.00s and <Picture 2> (last_frame.jpg) shows the final composition at the end of the shot. Describe the exact Delta trajectory from the <Picture 1> framing through the middle motion to the <Picture 2> framing.",
+    );
+    if first_uri.is_none() || last_uri.is_none() {
+        delta_instruction.push_str(
+            " If an anchor frame image is missing, infer the missing endpoint from the contact sheet instead.",
+        );
+    }
+
+    let mut brief = format!(
+        "Analyze shot '{}' ({:.2}s to {:.2}s, duration: {:.2}s, anchor: {}). Speaker: {}. Audio peaks at: {:?}. Required dialogue line for prompt_ko: '{}'. Required dialogue clause for prompt_h3: '{}'. {}. Reproduce the original shot as closely as possible: match the camera framing, subject blocking, lighting, wardrobe, and background visible in the images exactly, changing nothing except what customization blocks require.",
+        ctx.shot_id,
+        ctx.start_sec,
+        ctx.end_sec,
+        ctx.duration,
+        anchor,
+        ctx.speaker,
+        ctx.audio_peaks,
+        ko_dlg,
+        h3_dlg,
+        delta_instruction
+    );
+    let scene_bible = ctx.scene_bible;
+    if let Some(bible) = scene_bible {
+        brief.push_str("\n\nScene bible (must stay consistent):\n");
+        brief.push_str(&format_scene_bible_for_m3(bible));
+    }
+    if let Some(summary) = ctx.series_world_summary {
+        if !summary.trim().is_empty() {
+            brief.push_str("\n\nSeries context (world bible summary):\n");
+            brief.push_str(summary.trim());
+        }
+    }
+
+    let mut content: Vec<serde_json::Value> = vec![serde_json::json!({
+        "type": "text",
+        "text": brief
+    })];
+    // Contact sheet first (storyboard overview), then <Picture 1> and
+    // <Picture 2> anchors so the model can trace the Delta trajectory.
+    content.push(serde_json::json!({
+        "type": "image_url",
+        "image_url": { "url": contact_uri }
+    }));
+    if let Some(uri) = first_uri {
+        content.push(serde_json::json!({
+            "type": "text",
+            "text": "<Picture 1> (first_frame.jpg): opening composition at 0.00s."
+        }));
+        content.push(serde_json::json!({
+            "type": "image_url",
+            "image_url": { "url": uri }
+        }));
+    }
+    if let Some(uri) = last_uri {
+        content.push(serde_json::json!({
+            "type": "text",
+            "text": "<Picture 2> (last_frame.jpg): final composition at the end of the shot."
+        }));
+        content.push(serde_json::json!({
+            "type": "image_url",
+            "image_url": { "url": uri }
+        }));
+    }
 
     let user_msg = serde_json::json!({
         "model": "MiniMax-M3",
@@ -467,21 +641,7 @@ fn try_minimax_m3_api(ctx: &PromptGenContext, api_key: &str) -> Result<(String, 
             },
             {
                 "role": "user",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": format!(
-                            "Analyze shot '{}' ({:.2}s to {:.2}s, duration: {:.2}s). Speaker: {}. Audio peaks at: {:?}. Required dialogue line for prompt_ko: '{}'. Required dialogue clause for prompt_h3: '{}'. Reproduce the original shot as closely as possible: match the camera framing, subject blocking, lighting, wardrobe, and background visible in the contact sheet exactly, changing nothing except what customization blocks require.",
-                            ctx.shot_id, ctx.start_sec, ctx.end_sec, ctx.duration, ctx.speaker, ctx.audio_peaks, ko_dlg, h3_dlg
-                        )
-                    },
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": data_uri
-                        }
-                    }
-                ]
+                "content": content
             }
         ]
     });
@@ -504,7 +664,7 @@ fn try_minimax_m3_api(ctx: &PromptGenContext, api_key: &str) -> Result<(String, 
     let parsed: serde_json::Value = parse_llm_json(text)?;
     let ko =
         json_field_to_text(&parsed["prompt_ko"], &["prompt_ko"]).context("Missing prompt_ko")?;
-    let h3 = json_field_to_text(
+    let raw_h3 = json_field_to_text(
         &parsed["prompt_h3"],
         &[
             "integrated_multimodal_description",
@@ -513,6 +673,7 @@ fn try_minimax_m3_api(ctx: &PromptGenContext, api_key: &str) -> Result<(String, 
         ],
     )
     .context("Missing prompt_h3")?;
+    let h3 = ensure_h3_reference_header(&raw_h3, ctx.shot_index, anchor);
 
     Ok((ko, h3))
 }
@@ -775,7 +936,7 @@ pub fn translate_ko_base_to_h3_m3(
         .timeout(std::time::Duration::from_secs(180))
         .build()?;
 
-    let system_prompt = "You are a professional film reverse-engineering director and prompt engineer for MiniMax-H3 video generation. Translate and recompile the provided Korean director notes (prompt.ko.md base) into a structured English MiniMax-H3 prompt. The prompt must strictly adhere to the MiniMax-H3 schema with 'integrated_multimodal_description:', 'overall_soundscape:', and 'non_diegetic_music:'. Output valid JSON with a single key 'prompt_h3'. Preserve any <d>[Language] ...</d> dialogue tags exactly as provided in the input text without translation.";
+    let system_prompt = "You are a professional film reverse-engineering director and prompt engineer for MiniMax-H3 video generation. Translate and recompile the provided Korean director notes (prompt.ko.md base) into a structured English MiniMax-H3 prompt. The prompt must strictly adhere to the MiniMax-H3 schema with 'integrated_multimodal_description:', 'overall_soundscape:', and 'non_diegetic_music:'. The shot body must stay consistent with the scene bible person IDs and eyeline grammar when provided. NEGATIVE RULES (never describe these): broadcast station logos (e.g. VA logo), watermarks, burned-in timestamp numbers, hardcoded subtitle text, or any on-screen overlay graphics. Output valid JSON with a single key 'prompt_h3'. Preserve any <d>[Language] ...</d> dialogue tags exactly as provided in the input text without translation.";
 
     let user_msg = serde_json::json!({
         "model": "MiniMax-M3",
@@ -813,7 +974,7 @@ pub fn translate_ko_base_to_h3_m3(
         .context("Missing content in MiniMax prompt compile response")?;
 
     let parsed: serde_json::Value = parse_llm_json(text)?;
-    let h3 = json_field_to_text(
+    let raw_h3 = json_field_to_text(
         &parsed["prompt_h3"],
         &[
             "integrated_multimodal_description",
@@ -822,8 +983,17 @@ pub fn translate_ko_base_to_h3_m3(
         ],
     )
     .context("Missing prompt_h3 in response")?;
-
-    Ok(h3)
+    let shot_number = shot_meta
+        .shot_id
+        .rsplit('_')
+        .next()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(1);
+    Ok(ensure_h3_reference_header(
+        &raw_h3,
+        shot_number,
+        &shot_meta.anchor,
+    ))
 }
 
 fn generate_deterministic_template(ctx: &PromptGenContext) -> (String, String) {
@@ -839,6 +1009,16 @@ fn generate_deterministic_template(ctx: &PromptGenContext) -> (String, String) {
     // Visual modifications and traits are injected via customization blocks.
     let ko_mod = "";
     let h3_mod = "";
+    let anchor = if ctx.anchor.is_empty() {
+        "first_and_last"
+    } else {
+        ctx.anchor
+    };
+    let reference_line = reference_line_for(anchor, ctx.shot_index);
+    let series_line = match ctx.series_world_summary {
+        Some(s) if !s.trim().is_empty() => format!("\nSeries context: {}.", s.trim()),
+        _ => String::new(),
+    };
 
     let ko = format!(
         r#"# 샷 연출 지시서: {} ({:.2}s ~ {:.2}s)
@@ -874,10 +1054,10 @@ fn generate_deterministic_template(ctx: &PromptGenContext) -> (String, String) {
     );
 
     let h3 = format!(
-        r#"For the target video, at 0.00 seconds into the target video, <Picture 1> and <Picture 2> (from [Shot {}]) are fully referenced.
+        r#"{reference_line}
 
 integrated_multimodal_description:
-From 0.0s to {:.1}s, the camera and subjects follow a smooth, realistic trajectory anchored by the first frame.{} {} At {}, a subtle acoustic peak is heard.
+From 0.0s to {:.1}s, the camera and subjects follow a smooth, realistic trajectory anchored by the first frame.{} {} At {}, a subtle acoustic peak is heard. Describe the exact Delta trajectory from <Picture 1> through the middle motion to <Picture 2>.{} Do not describe broadcast logos, watermarks, burned-in timestamps, or hardcoded subtitle text.
 From {:.1}s to {:.1}s, subtle head movement, natural gesture, and facial expression transition seamlessly into the final frame composition.
 
 overall_soundscape:
@@ -886,7 +1066,7 @@ Realistic spatial ambiance with clean environmental presence and natural acousti
 non_diegetic_music:
 Subtle, restrained cinematic underscore maintaining dramatic tension without overpowering the dialogue.
 "#,
-        ctx.shot_index, half_dur, h3_mod, h3_dlg, peak_str, half_dur, dur_round
+        half_dur, h3_mod, h3_dlg, peak_str, series_line, half_dur, dur_round
     );
 
     (ko, h3)
@@ -1083,5 +1263,35 @@ Let's emit JSON:
         let fixed = sanitize_json_control_chars(raw);
         let parsed: serde_json::Value = serde_json::from_str(&fixed).expect("should parse");
         assert_eq!(parsed["a"], "line1\nline2");
+    }
+
+    #[test]
+    fn test_reference_line_for_anchors() {
+        assert!(reference_line_for("first_and_last", 3).contains("<Picture 1> and <Picture 2>"));
+        assert!(reference_line_for("first_and_last", 3).contains("[Shot 3]"));
+        assert!(reference_line_for("first_only", 5).contains("<Picture 1> (from [Shot 5])"));
+        assert!(reference_line_for("ref_only", 5).contains("<Picture 1> (from [Shot 5])"));
+        assert!(reference_line_for("none", 7).contains("generate Shot 7"));
+    }
+
+    #[test]
+    fn test_ensure_h3_reference_header() {
+        // Missing header is prepended.
+        let body = "integrated_multimodal_description:\nSome scene.";
+        let fixed = ensure_h3_reference_header(body, 2, "first_and_last");
+        assert!(fixed.starts_with("For the target video"));
+        assert!(fixed.contains("<Picture 1> and <Picture 2> (from [Shot 2])"));
+        // Correct header is kept as-is.
+        let expected = reference_line_for("first_only", 4);
+        let already = format!("{}\n\nintegrated_multimodal_description:\nX", expected);
+        assert_eq!(
+            ensure_h3_reference_header(&already, 4, "first_only"),
+            already
+        );
+        // Stale header line is replaced.
+        let stale = "For the target video, at 0.00 seconds into the target video, WRONG.\n\nbody";
+        let fixed2 = ensure_h3_reference_header(stale, 9, "first_and_last");
+        assert!(fixed2.contains("[Shot 9]"));
+        assert!(!fixed2.contains("WRONG"));
     }
 }

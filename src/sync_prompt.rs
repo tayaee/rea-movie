@@ -9,6 +9,95 @@ pub struct SyncPromptOptions<'a> {
     pub force: bool,
 }
 
+/// True when the line carries Hangul outside a `<d>...</d>` dialogue tag.
+/// Dialogue tags are preserved verbatim; all other Korean prose must be
+/// replaced with English structured direction (issue 9).
+pub fn contains_hangul_outside_dialogue(line: &str) -> bool {
+    // Strip all <d>...</d> spans before checking for Hangul.
+    let mut rest = line;
+    let mut plain = String::with_capacity(line.len());
+    while let Some(start) = rest.find("<d>") {
+        plain.push_str(&rest[..start]);
+        let after = &rest[start + 3..];
+        if let Some(end) = after.find("</d>") {
+            rest = &after[end + 4..];
+        } else {
+            rest = after;
+            break;
+        }
+    }
+    plain.push_str(rest);
+    plain.chars().any(is_hangul_char)
+}
+
+fn is_hangul_char(c: char) -> bool {
+    ('\u{AC00}'..='\u{D7A3}').contains(&c)
+        || ('\u{1100}'..='\u{11FF}').contains(&c)
+        || ('\u{3130}'..='\u{318F}').contains(&c)
+}
+
+/// Remove a prepended `<!-- rea-movie:scene:begin ... -->...<!-- rea-movie:scene:end ... -->`
+/// block so the offline compiler never copies Korean scene prose into the H3
+/// base (the English scene block is re-attached afterwards by
+/// `compile_prompt_file`).
+fn strip_scene_block_for_compile(text: &str) -> String {
+    let begin_marker = "<!-- rea-movie:scene:begin";
+    let end_marker = "<!-- rea-movie:scene:end";
+    let mut out = text.to_string();
+    loop {
+        let Some(start) = out.find(begin_marker) else {
+            break;
+        };
+        let after_start = &out[start..];
+        let Some(end_rel) = after_start.find(end_marker) else {
+            break;
+        };
+        let after_end = &after_start[end_rel..];
+        let Some(close_rel) = after_end.find("-->") else {
+            break;
+        };
+        let end_abs = start + end_rel + close_rel + 3;
+        out.replace_range(start..end_abs, "");
+    }
+    // Drop stray scene marker lines that survived without a pair.
+    out.lines()
+        .filter(|l| !l.trim().starts_with("<!-- rea-movie:scene:"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Clean section body lines for H3 output: keep dialogue tags verbatim,
+/// drop Korean directing prose (replaced once with `fallback_en`).
+fn clean_h3_body_lines(lines: &[String], fallback_en: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut dropped_korean = false;
+    let mut silent_seen = false;
+    for line in lines {
+        if line.contains("<d>") {
+            out.push(line.clone());
+        } else if line.contains("rea-movie:") && line.trim().starts_with("<!--") {
+            // Never copy idempotency markers into the H3 base.
+            continue;
+        } else if contains_hangul_outside_dialogue(line) {
+            dropped_korean = true;
+            if line.contains("대사 없음") {
+                silent_seen = true;
+            }
+        } else if !line.trim().is_empty() {
+            out.push(line.clone());
+        }
+    }
+    if silent_seen {
+        out.push(
+            "No spoken dialogue in this shot; characters remain silent with natural ambient sound."
+                .to_string(),
+        );
+    } else if dropped_korean {
+        out.push(fallback_en.to_string());
+    }
+    out
+}
+
 /// Compile the Korean director note into the structured English prompt consumed
 /// by MiniMax-H3. This compiler is intentionally deterministic: rendering must
 /// remain reproducible and must not depend on a vision API call.
@@ -44,8 +133,9 @@ pub fn compile_ko_to_h3(ko_prompt: &str, meta: &ShotMeta) -> Result<String> {
         other => bail!("Unsupported shot anchor: {other}"),
     };
 
-    let sections = split_sections(ko_prompt);
-    let integrated = sections
+    let ko_noscene = strip_scene_block_for_compile(ko_prompt);
+    let sections = split_sections(&ko_noscene);
+    let integrated_raw: Vec<String> = sections
         .iter()
         .filter(|(heading, _)| {
             !heading.contains("음향")
@@ -54,33 +144,62 @@ pub fn compile_ko_to_h3(ko_prompt: &str, meta: &ShotMeta) -> Result<String> {
                 && !heading.contains("BGM")
         })
         .flat_map(|(_, body)| body.iter().cloned())
-        .collect::<Vec<_>>();
+        .collect();
 
-    let soundscape = sections
+    // Issue 9: never copy Korean directing prose into the H3 base (dialogue
+    // <d> tags are the only exception). Dropped Korean is replaced with a
+    // single English structured direction so meaning is not silently lost.
+    let integrated_lines = clean_h3_body_lines(
+        &integrated_raw,
+        "Maintain the established camera framing, character blocking, eyelines, and action continuity with smooth realistic motion from <Picture 1> to <Picture 2>.",
+    );
+
+    let soundscape_raw: Option<Vec<String>> = sections
         .iter()
         .find(|(heading, _)| {
             heading.contains("음향") || heading.contains("Soundscape") || heading.contains("공간음")
         })
-        .map(|(_, body)| body.join("\n"))
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| {
-            "Natural ambience that remains spatially consistent with the described scene."
-                .to_string()
-        });
+        .map(|(_, body)| body.clone());
+    let soundscape = match soundscape_raw {
+        Some(body) => {
+            let cleaned = clean_h3_body_lines(
+                &body,
+                "Natural ambience that remains spatially consistent with the described scene.",
+            );
+            if cleaned.is_empty() {
+                "Natural ambience that remains spatially consistent with the described scene."
+                    .to_string()
+            } else {
+                cleaned.join("\n")
+            }
+        }
+        None => "Natural ambience that remains spatially consistent with the described scene."
+            .to_string(),
+    };
 
-    let music = sections
+    let music_raw: Option<Vec<String>> = sections
         .iter()
         .find(|(heading, _)| heading.contains("배경음악") || heading.contains("BGM"))
-        .map(|(_, body)| body.join("\n"))
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| {
-            "No intrusive non-diegetic music; preserve the scene ambience.".to_string()
-        });
+        .map(|(_, body)| body.clone());
+    let music = match music_raw {
+        Some(body) => {
+            let cleaned = clean_h3_body_lines(
+                &body,
+                "No intrusive non-diegetic music; preserve the scene ambience.",
+            );
+            if cleaned.is_empty() {
+                "No intrusive non-diegetic music; preserve the scene ambience.".to_string()
+            } else {
+                cleaned.join("\n")
+            }
+        }
+        None => "No intrusive non-diegetic music; preserve the scene ambience.".to_string(),
+    };
 
-    let integrated = if integrated.is_empty() {
-        ko_prompt.trim().to_string()
+    let integrated = if integrated_lines.is_empty() {
+        "Maintain the established camera framing, character blocking, eyelines, and action continuity with smooth realistic motion from <Picture 1> to <Picture 2>.".to_string()
     } else {
-        integrated.join("\n")
+        integrated_lines.join("\n")
     };
     // Section 3.7: Removed hardcoded "kbo"/"야구모자" branching.
     // Trait injection is handled uniformly via customization blocks.
@@ -297,6 +416,49 @@ mod tests {
         assert!(compiled.contains("overall_soundscape:"));
         assert!(compiled.contains("non_diegetic_music:"));
         assert!(compiled.contains("<Picture 1> and <Picture 2>"));
+    }
+
+    #[test]
+    fn compiler_drops_korean_prose_but_keeps_dialogue() {
+        let ko = "# 샷 연출 지시서\n\n## 1. 화면 및 카메라 연출\n- 카메라는 원본 첫 프레임을 따라간다.\n- S1: <d>[Korean] 긴장감 넘치는 장면이다.</d>\n\n## 4. 음향 및 공간음\n- 현장 공간감이 살아있다.\n\n## 5. 배경음악\n- 절제된 시네마틱 배경음.\n";
+        let compiled = compile_ko_to_h3(ko, &meta("first_and_last")).unwrap();
+        assert!(compiled.contains("<Picture 1> and <Picture 2>"));
+        // Dialogue tag is preserved verbatim.
+        assert!(compiled.contains("<d>[Korean] 긴장감 넘치는 장면이다.</d>"));
+        // Non-dialogue sections must not contain Hangul.
+        for section in [
+            "integrated_multimodal_description:",
+            "overall_soundscape:",
+            "non_diegetic_music:",
+        ] {
+            let start = compiled.find(section).expect("section header");
+            let rest = &compiled[start..];
+            let end = rest[section.len()..]
+                .find("\n\n")
+                .map(|i| start + section.len() + i)
+                .unwrap_or(compiled.len());
+            let body = &compiled[start..end];
+            let body_outside_dialogue: String = {
+                let mut tmp = body.to_string();
+                // Remove <d>...</d> spans before checking.
+                while let Some(s) = tmp.find("<d>") {
+                    if let Some(e) = tmp[s..].find("</d>") {
+                        tmp.replace_range(s..s + e + 4, "");
+                    } else {
+                        break;
+                    }
+                }
+                tmp
+            };
+            assert!(
+                !body_outside_dialogue
+                    .chars()
+                    .any(|c| ('\u{AC00}'..='\u{D7A3}').contains(&c)),
+                "Hangul leaked in {}: {}",
+                section,
+                body
+            );
+        }
     }
 
     #[test]

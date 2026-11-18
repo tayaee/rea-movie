@@ -22,6 +22,7 @@ pub struct DecompileOptions<'a> {
     pub output_dir: Option<&'a str>,
     pub range: Option<&'a str>,
     pub max_shot_duration: Option<f64>,
+    pub min_shot_duration: Option<f64>,
     pub force: bool,
     pub run_after: bool,
     pub smoke: bool,
@@ -47,13 +48,80 @@ pub fn check_series_context(proj_dir: &Path) {
     let has_context = series_root_for(proj_dir)
         .map(|root| root.join("story").join("world.json"))
         .map(|p| p.is_file())
-        .unwrap_or(false);
+        .unwrap_or(false)
+        || proj_dir.join("story").join("world.json").is_file();
     if !has_context {
         eprintln!(
             "{} Warning: no series context (<root>/story/world.json). Proceeding with locally scoped IDs; cross-episode consistency is NOT guaranteed. Ask the user for the full series first (skill section 3-0).",
             crate::log::stamp()
         );
     }
+}
+
+/// Load `<root>/story/world.json` (or `<proj>/story/world.json`) and summarize
+/// it into a short English string for M3 prompt injection (issue 9).
+/// Returns None when no world bible exists.
+pub fn load_series_world_summary(proj_dir: &Path) -> Option<String> {
+    let candidates = [
+        series_root_for(proj_dir).map(|r| r.join("story").join("world.json")),
+        Some(proj_dir.join("story").join("world.json")),
+    ];
+    let path = candidates.into_iter().flatten().find(|p| p.is_file())?;
+    let content = std::fs::read_to_string(&path).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&content).ok()?;
+    let mut parts = Vec::new();
+    for key in ["era", "season", "weather", "color_grade"] {
+        if let Some(val) = v.get(key) {
+            if val.is_null() {
+                continue;
+            }
+            let s = match val {
+                serde_json::Value::String(t) => t.clone(),
+                other => other.to_string(),
+            };
+            if !s.trim().is_empty() && s.trim() != "null" {
+                parts.push(format!("{}: {}", key, s.trim()));
+            }
+        }
+    }
+    if let Some(locs) = v.get("locations").and_then(|l| l.as_array()) {
+        let names: Vec<String> = locs
+            .iter()
+            .take(6)
+            .map(|l| {
+                if let Some(s) = l.as_str() {
+                    s.to_string()
+                } else if let Some(name) = l.get("name").and_then(|n| n.as_str()) {
+                    let mut d = name.to_string();
+                    if let Some(desc) = l.get("description").and_then(|x| x.as_str()) {
+                        if !desc.is_empty() {
+                            d.push_str(&format!(" ({})", desc));
+                        }
+                    }
+                    d
+                } else {
+                    l.to_string()
+                }
+            })
+            .collect();
+        if !names.is_empty() {
+            parts.push(format!("locations: {}", names.join("; ")));
+        }
+    }
+    if let Some(cine) = v.get("cinematography") {
+        let s = cine.to_string();
+        if s.len() < 400 {
+            parts.push(format!("cinematography: {}", s));
+        }
+    }
+    if parts.is_empty() {
+        // Fall back to a truncated raw dump so *some* series context flows.
+        let s = content.replace(|c: char| c.is_whitespace(), " ");
+        let t: String = s.split_whitespace().collect::<Vec<_>>().join(" ");
+        return Some(t.chars().take(800).collect());
+    }
+    let out = parts.join(" | ");
+    Some(out.chars().take(1200).collect())
 }
 
 pub fn run_decompile(opts: DecompileOptions) -> Result<PathBuf> {
@@ -149,6 +217,7 @@ pub fn run_decompile(opts: DecompileOptions) -> Result<PathBuf> {
     }
 
     let max_dur = opts.max_shot_duration.unwrap_or(8.0);
+    let min_dur = opts.min_shot_duration.unwrap_or(0.0);
     let total_dur = source_cache
         .as_ref()
         .and_then(|c| c.probe(opts.force).ok())
@@ -185,16 +254,19 @@ pub fn run_decompile(opts: DecompileOptions) -> Result<PathBuf> {
         crate::log::stamp(),
         max_dur
     );
-    let spans = if total_dur > 0.0 {
-        build_shot_spans_with(total_dur, opts.range, max_dur, |s, e| match &source_cache {
-            Some(cache) => cache
-                .scene_cuts(s, e, opts.force, |s, e| detect_scene_cuts(&input_str, s, e))
-                .unwrap_or_default(),
-            None => detect_scene_cuts(&input_str, s, e).unwrap_or_default(),
-        })?
-    } else {
-        build_shot_spans(&input_str, opts.range, max_dur)?
-    };
+    let spans =
+        if total_dur > 0.0 {
+            build_shot_spans_with(total_dur, opts.range, max_dur, min_dur, |s, e| {
+                match &source_cache {
+                    Some(cache) => cache
+                        .scene_cuts(s, e, opts.force, |s, e| detect_scene_cuts(&input_str, s, e))
+                        .unwrap_or_default(),
+                    None => detect_scene_cuts(&input_str, s, e).unwrap_or_default(),
+                }
+            })?
+        } else {
+            build_shot_spans(&input_str, opts.range, max_dur, min_dur)?
+        };
     println!(
         "{} ==> Total shots identified: {}",
         crate::log::stamp(),
@@ -509,6 +581,8 @@ pub fn run_decompile(opts: DecompileOptions) -> Result<PathBuf> {
     }
 
     // 5d. Loop B: shot.toml + timeline + prompts, all carrying scene context.
+    // Issue 9: series world summary is loaded once and injected into every M3 call.
+    let series_world_summary = load_series_world_summary(&proj_dir);
     for work in &work_items {
         let scene_id = span_scene_id
             .get(work.span_idx)
@@ -602,6 +676,9 @@ pub fn run_decompile(opts: DecompileOptions) -> Result<PathBuf> {
             }
         }
 
+        // Issue 9: anchor frames for <Picture 1>/<Picture 2> injection.
+        let first_frame_path = work.shot_dir.join("refs").join("first_frame.jpg");
+        let last_frame_path = work.shot_dir.join("refs").join("last_frame.jpg");
         let prompt_ctx = PromptGenContext {
             shot_id: &work.shot_id,
             shot_index: work.index,
@@ -622,6 +699,19 @@ pub fn run_decompile(opts: DecompileOptions) -> Result<PathBuf> {
             subtitle_lines: &span_subtitles,
             has_subtitle_track,
             custom_mod: opts.custom_mod,
+            first_frame_path: if first_frame_path.is_file() {
+                Some(&first_frame_path)
+            } else {
+                None
+            },
+            last_frame_path: if last_frame_path.is_file() {
+                Some(&last_frame_path)
+            } else {
+                None
+            },
+            scene_bible,
+            series_world_summary: series_world_summary.as_deref(),
+            anchor: shot_meta.anchor.as_str(),
         };
 
         // Section 3.2 & Section 3.5: Resolve blocks and inject into prompts

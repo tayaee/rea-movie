@@ -701,7 +701,9 @@ fn request_h3(
     }
 
     let mut form = Form::new()
-        .text("prompt", prompt.to_string())
+        // Issue 9: transmit a marker-free prompt; the on-disk file keeps
+        // `<!-- rea-movie:... -->` markers for idempotent re-application.
+        .text("prompt", clean_prompt_for_h3(prompt))
         .text("width", profile.width.to_string())
         .text("height", profile.height.to_string())
         .text("fps", profile.fps.to_string())
@@ -888,6 +890,58 @@ fn shot_dir(proj_dir: &Path, shot_id: &str) -> PathBuf {
     proj_dir.join("shots").join(shot_id)
 }
 
+/// Issue 9: strip `<!-- rea-movie:... -->` HTML comment markers before
+/// sending the prompt to the H3 server. The on-disk `prompt.h3.txt` keeps
+/// the markers for idempotency; only the transmitted copy is cleaned.
+pub fn strip_html_comment_markers(prompt: &str) -> String {
+    let mut out = String::with_capacity(prompt.len());
+    let mut rest = prompt;
+    while let Some(start) = rest.find("<!--") {
+        out.push_str(&rest[..start]);
+        let after = &rest[start..];
+        if let Some(end_rel) = after.find("-->") {
+            let marker = &after[..end_rel + 3];
+            if !marker.contains("rea-movie:") {
+                out.push_str(marker);
+            } else if !out.ends_with('\n') && rest[end_rel + 3..].starts_with('\n') {
+                // keep line structure tidy; the newline is copied below
+            }
+            rest = &after[end_rel + 3..];
+        } else {
+            // Unclosed comment: keep the remainder as-is.
+            out.push_str(after);
+            rest = "";
+            break;
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Clean a prompt for H3 transmission: remove rea-movie HTML markers and
+/// collapse the blank lines they leave behind (issue 9).
+pub fn clean_prompt_for_h3(prompt: &str) -> String {
+    let stripped = strip_html_comment_markers(prompt);
+    let mut lines = Vec::new();
+    let mut prev_blank = false;
+    for line in stripped.lines() {
+        // A marker-only line becomes empty after stripping; drop it.
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            if !prev_blank {
+                lines.push(String::new());
+            }
+            prev_blank = true;
+            continue;
+        }
+        prev_blank = false;
+        lines.push(line.to_string());
+    }
+    // Trim leading/trailing blank lines but preserve internal structure.
+    let text = lines.join("\n");
+    text.trim().to_string()
+}
+
 fn mock_h3_from_environment() -> bool {
     std::env::var("REA_MOVIE_MOCK_H3")
         .map(|value| {
@@ -1008,5 +1062,17 @@ mod tests {
         let second = backup_to_history(&target).unwrap().unwrap();
         assert_eq!(second.file_name().unwrap(), "take_002.mp4");
         assert_eq!(fs::read(&second).unwrap(), b"new");
+    }
+
+    #[test]
+    fn strip_markers_removes_rea_movie_comments_only() {
+        let prompt = "<!-- rea-movie:scene:begin id=scene_0001 -->\nScene continuity context (scene_0001):\n<!-- rea-movie:scene:end id=scene_0001 -->\n\nFor the target video, at 0.00 seconds into the target video, <Picture 1> and <Picture 2> (from [Shot 1]) are fully referenced.\n\nintegrated_multimodal_description:\nAction.";
+        let cleaned = clean_prompt_for_h3(prompt);
+        assert!(!cleaned.contains("rea-movie:"));
+        assert!(cleaned.contains("<Picture 1> and <Picture 2>"));
+        assert!(cleaned.contains("integrated_multimodal_description:"));
+        // Non-rea-movie comments are preserved.
+        let other = "<!-- keep me -->\nBody";
+        assert!(clean_prompt_for_h3(other).contains("keep me"));
     }
 }

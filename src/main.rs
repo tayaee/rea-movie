@@ -34,6 +34,7 @@ fn main() -> Result<()> {
                 output_dir: args.output.as_deref(),
                 range: args.range.as_deref(),
                 max_shot_duration: Some(args.max_shot_duration),
+                min_shot_duration: Some(args.min_shot_duration),
                 force: args.force,
                 run_after: args.run,
                 smoke: args.smoke,

@@ -453,6 +453,7 @@ fn execute_tool(name: &str, args: &Value) -> Result<String> {
             let output = args.get("output").and_then(|v| v.as_str());
             let range = args.get("range").and_then(|v| v.as_str());
             let max_shot_duration = args.get("max_shot_duration").and_then(|v| v.as_f64());
+            let min_shot_duration = args.get("min_shot_duration").and_then(|v| v.as_f64());
             let force = args.get("force").and_then(|v| v.as_bool()).unwrap_or(false);
             let run = args.get("run").and_then(|v| v.as_bool()).unwrap_or(false);
             let smoke = args.get("smoke").and_then(|v| v.as_bool()).unwrap_or(false);
@@ -468,6 +469,7 @@ fn execute_tool(name: &str, args: &Value) -> Result<String> {
                 output_dir: output,
                 range,
                 max_shot_duration,
+                min_shot_duration,
                 force,
                 run_after: run,
                 smoke,

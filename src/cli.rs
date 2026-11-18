@@ -76,6 +76,11 @@ pub struct DecompileArgs {
     #[arg(long = "max-shot-duration", default_value = "8.0")]
     pub max_shot_duration: f64,
 
+    /// Minimum shot duration (in seconds); shorter micro-cuts are merged with
+    /// an adjacent shot within max-shot-duration (default: 0.0 = no merging)
+    #[arg(long = "min-shot-duration", default_value = "0.0")]
+    pub min_shot_duration: f64,
+
     /// Force overwrite existing references and prompts
     #[arg(short = 'f', long = "force")]
     pub force: bool,
