@@ -175,7 +175,17 @@ pub fn extract_shot_references(
                     what,
                 );
                 match res {
-                    Ok(()) => return Ok(()),
+                    Ok(())
+                        if out.is_file()
+                            && out.metadata().map(|m| m.len() > 0).unwrap_or(false) =>
+                    {
+                        return Ok(())
+                    }
+                    Ok(()) => {
+                        last_err = format!(
+                            "ffmpeg exited 0 but output file was not written at ct={ct:.3}"
+                        );
+                    }
                     Err(e) => last_err = format!("{e:#}"),
                 }
             }
