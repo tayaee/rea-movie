@@ -74,6 +74,9 @@ pub fn fallback_translate_line(text: &str, target_lang: &str) -> String {
 
 /// Batch-translate cue texts into `target_lang` via MiniMax-M3.
 /// Returns the same number of lines in the same order.
+/// The prompt forces real output in the target language: the model must
+/// never echo the input unchanged (unless it is already in the target
+/// language) and never emit English for non-English targets.
 pub fn translate_cues_to_lang_m3(
     cues: &[SubtitleCue],
     target_lang: &str,
@@ -88,8 +91,8 @@ pub fn translate_cues_to_lang_m3(
         .timeout(std::time::Duration::from_secs(600))
         .build()?;
     let system_prompt = format!(
-        "You are a professional film subtitle translator. Translate each subtitle line into natural, conversational {} ({}). Keep the same screen-time length, keep speaker names and proper nouns transliterated, and keep punctuation light. Output a valid JSON array of strings with the exact same order and count as the input, no extra text.",
-        target_lang_name, target_lang
+        "You are a professional film subtitle translator. Translate each subtitle line into natural, conversational {} ({}). The output MUST be in {} even when the input is English: never echo English input unchanged for a non-English target, and never output English unless the target is English. Keep the same screen-time length, keep speaker names and proper nouns transliterated, and keep punctuation light. Output a valid JSON array of strings with the exact same order and count as the input, no extra text.",
+        target_lang_name, target_lang, target_lang_name
     );
     let mut out = Vec::with_capacity(cues.len());
     for chunk in cues.chunks(CHUNK) {
@@ -163,8 +166,194 @@ pub fn translate_cues_to_lang_m3(
     Ok(out)
 }
 
+/// Map an SRT language code to the display name used by
+/// `detect_dialogue_language` (issue 11 §3-2).
+fn lang_code_to_language(code: &str) -> &'static str {
+    match code {
+        "ko" => "Korean",
+        "zh" => "Chinese",
+        "ja" => "Japanese",
+        "fr" => "French",
+        "de" => "German",
+        _ => "English",
+    }
+}
+
+/// True when the source cues are already (mostly) in the target language,
+/// so no M3 call is needed and a verbatim copy preserves quality.
+fn source_already_in_target(cues: &[SubtitleCue], target_code: &str) -> bool {
+    if cues.is_empty() {
+        return true;
+    }
+    let want = lang_code_to_language(target_code);
+    let mut hits = 0usize;
+    let mut counted = 0usize;
+    for cue in cues {
+        let t = cue.text.trim();
+        if t.is_empty() {
+            continue;
+        }
+        counted += 1;
+        // Detect against the target as hint so digits/punctuation-only
+        // lines do not force a translation round-trip.
+        if crate::decompile::prompt::detect_dialogue_language(t, target_code) == want {
+            hits += 1;
+        }
+    }
+    if counted == 0 {
+        return true;
+    }
+    hits * 10 >= counted * 8
+}
+
+/// Strip a deterministic-fallback `"[XX] "` prefix for one language.
+fn strip_fallback_prefix<'a>(text: &'a str, target_lang: &str) -> &'a str {
+    let t = text.trim();
+    let tag = format!("[{}]", target_lang.to_uppercase());
+    if let Some(rest) = t.strip_prefix(&tag) {
+        return rest.trim();
+    }
+    t
+}
+
+/// True when a cached/output line is just the offline placeholder
+/// (`verbatim source` or `"[XX] source"`) rather than a real translation.
+fn is_fallback_line(line: &str, source_text: &str, target_lang: &str) -> bool {
+    let t = line.trim();
+    let s = source_text.trim();
+    if t == s {
+        // Identical copy is only a real translation when the source is
+        // already in the target language.
+        return target_lang != "ko"
+            || crate::decompile::prompt::detect_dialogue_language(s, "ko") != "Korean";
+    }
+    strip_fallback_prefix(t, target_lang) == s
+}
+
+/// True when a cached SRT looks like the deterministic offline placeholder
+/// instead of a real M3 translation (majority of lines are fallbacks).
+fn cache_is_fallback(cache: &[SubtitleCue], source: &[SubtitleCue], target_lang: &str) -> bool {
+    if cache.len() != source.len() || source.is_empty() {
+        return false;
+    }
+    let mut fallback_hits = 0usize;
+    for (c, s) in cache.iter().zip(source.iter()) {
+        if is_fallback_line(&c.text, &s.text, target_lang) {
+            fallback_hits += 1;
+        }
+    }
+    fallback_hits * 2 >= source.len()
+}
+
+/// True when a cached SRT fails target-script validation (e.g. an old
+/// `.ja.srt` full of English from before validation existed).
+fn cache_fails_validation(
+    cache: &[SubtitleCue],
+    source: &[SubtitleCue],
+    target_lang: &str,
+) -> bool {
+    if cache.len() != source.len() || source.is_empty() {
+        return false;
+    }
+    if source_already_in_target(source, target_lang) {
+        return false;
+    }
+    let lines: Vec<String> = cache.iter().map(|c| c.text.clone()).collect();
+    validate_translation(&lines, target_lang, source).is_err()
+}
+
+fn contains_hangul(s: &str) -> bool {
+    s.chars().any(|c| {
+        ('\u{AC00}'..='\u{D7A3}').contains(&c)
+            || ('\u{1100}'..='\u{11FF}').contains(&c)
+            || ('\u{3130}'..='\u{318F}').contains(&c)
+    })
+}
+
+fn contains_kana(s: &str) -> bool {
+    s.chars().any(|c| ('\u{3040}'..='\u{30FF}').contains(&c))
+}
+
+fn contains_cjk(s: &str) -> bool {
+    s.chars().any(|c| ('\u{4E00}'..='\u{9FFF}').contains(&c))
+}
+
+/// Validate that M3 output is really in `target_lang`.
+///
+/// Without this, an M3 outage/echo (or a code path that copies English
+/// verbatim) silently produces e.g. `EP01_smoke.ja.srt` full of English
+/// lines. Validation fails loudly so the caller regenerates instead of
+/// caching bogus subtitles.
+pub fn validate_translation(
+    lines: &[String],
+    target_lang: &str,
+    source_cues: &[SubtitleCue],
+) -> Result<()> {
+    if lines.len() != source_cues.len() {
+        anyhow::bail!(
+            "Translation count mismatch for lang={}: got {} lines for {} inputs",
+            target_lang,
+            lines.len(),
+            source_cues.len()
+        );
+    }
+    let mut checked = 0usize;
+    let mut script_hits = 0usize;
+    let mut identical = 0usize;
+    for (out, src) in lines.iter().zip(source_cues.iter()) {
+        let t = strip_fallback_prefix(out.trim(), target_lang);
+        if t.is_empty() {
+            continue;
+        }
+        checked += 1;
+        if t == src.text.trim() {
+            identical += 1;
+        }
+        let hit = match target_lang {
+            "ko" => contains_hangul(t),
+            "ja" => contains_kana(t) || contains_cjk(t),
+            "zh" => contains_cjk(t),
+            _ => t.chars().any(|c| c.is_ascii_alphabetic()),
+        };
+        if hit {
+            script_hits += 1;
+        }
+    }
+    if checked == 0 {
+        return Ok(());
+    }
+    let required_ratio = 0.5;
+    if (script_hits as f64) < (checked as f64) * required_ratio
+        && !source_already_in_target(source_cues, target_lang)
+    {
+        anyhow::bail!(
+            "M3 translation for lang={} is not in the target script (only {}/{} lines carry target script); refusing to write English-looking subtitles into a .{}.srt file",
+            target_lang,
+            script_hits,
+            checked,
+            target_lang
+        );
+    }
+    if identical * 10 >= checked * 9 && !source_already_in_target(source_cues, target_lang) {
+        anyhow::bail!(
+            "M3 translation for lang={} echoed the source verbatim ({}/{} identical); refusing to cache",
+            target_lang,
+            identical,
+            checked
+        );
+    }
+    Ok(())
+}
+
 /// Generate the six external subtitle files plus the always-on `.proof.srt`.
 /// Returns the list of written subtitle paths.
+///
+/// Online mode (`MINIMAX_API_KEY` set, no `--offline`) always translates via
+/// MiniMax-M3 and fails loudly on API/validation errors: it never writes the
+/// deterministic `"[XX] source"` placeholder into a language file, so a
+/// `.ja.srt` can no longer end up full of English. Pass `--offline`
+/// explicitly to get the deterministic placeholders. Stale placeholder
+/// caches from earlier runs are detected and retranslated when online.
 pub fn generate_multilang_subtitles(
     proj_dir: &Path,
     output_dir: &Path,
@@ -188,6 +377,15 @@ pub fn generate_multilang_subtitles(
             .map(|k| !k.trim().is_empty())
             .unwrap_or(false);
 
+    // Online without an API key would previously write English-looking
+    // placeholders into every language file. Fail loudly instead so the
+    // user knows real M3 translation did not happen.
+    if !source_cues.is_empty() && !offline && !online {
+        anyhow::bail!(
+            "Cannot produce real multilingual subtitles: MINIMAX_API_KEY is missing. Set it for MiniMax-M3 translation, or rerun with --offline for deterministic placeholders."
+        );
+    }
+
     let mut written = Vec::new();
     for (code, name) in SUPPORTED_LANGS {
         let cache_path = cache_dir.join(format!("{}.srt", code));
@@ -195,39 +393,57 @@ pub fn generate_multilang_subtitles(
         let mut cues = source_cues.clone();
 
         if cache_path.is_file() && !force {
-            // Reuse cache verbatim.
-            std::fs::copy(&cache_path, &out_path)
-                .with_context(|| format!("Failed to copy {:?} to {:?}", cache_path, out_path))?;
-            written.push(out_path);
-            continue;
+            let cached = crate::decompile::story::load_subtitle_cues_from(&cache_path);
+            let count_ok = cached.len() == source_cues.len();
+            let stale_fallback = online && cache_is_fallback(&cached, &source_cues, code);
+            let stale_invalid = online
+                && count_ok
+                && !stale_fallback
+                && cache_fails_validation(&cached, &source_cues, code);
+            if count_ok && !stale_fallback && !stale_invalid {
+                // Reuse a real cache verbatim.
+                std::fs::copy(&cache_path, &out_path).with_context(|| {
+                    format!("Failed to copy {:?} to {:?}", cache_path, out_path)
+                })?;
+                written.push(out_path);
+                continue;
+            }
+            if stale_fallback || stale_invalid {
+                eprintln!(
+                    "Warning: subtitles cache {:?} looks like an offline placeholder or wrong-language content; retranslating {} via MiniMax-M3",
+                    cache_path, code
+                );
+            } else if !count_ok {
+                eprintln!(
+                    "Warning: subtitles cache {:?} has {} cues for {} source cues; retranslating {}",
+                    cache_path,
+                    cached.len(),
+                    source_cues.len(),
+                    code
+                );
+            }
         }
 
-        // Translate (online M3) or deterministic fallback (offline/missing/failed).
-        let translated: Option<Vec<String>> = if online && !cues.is_empty() {
-            match translate_cues_to_lang_m3(&cues, code, name, api_key.as_deref().unwrap().trim()) {
-                Ok(lines) => Some(lines),
-                Err(e) => {
-                    eprintln!(
-                        "Warning: M3 subtitle translation failed for lang={} ({:#}); using deterministic fallback",
-                        code, e
-                    );
-                    None
-                }
+        if online && !cues.is_empty() && source_already_in_target(&cues, code) {
+            // Source already reads as the target language: verbatim copy,
+            // no M3 round-trip (avoids echo/paraphrase drift).
+        } else if online && !cues.is_empty() {
+            // Real M3 translation. Any API or validation failure is fatal:
+            // never cache or emit the `"[XX] English"` placeholder as if it
+            // were a Japanese/Chinese/... subtitle file.
+            let key = api_key.as_deref().unwrap_or("").trim().to_string();
+            let lines = translate_cues_to_lang_m3(&cues, code, name, &key).with_context(|| {
+                format!("MiniMax-M3 subtitle translation failed for lang={}", code)
+            })?;
+            validate_translation(&lines, code, &cues)?;
+            for (cue, line) in cues.iter_mut().zip(lines.into_iter()) {
+                cue.text = line;
             }
-        } else {
-            None
-        };
-        match translated {
-            Some(lines) => {
-                for (cue, line) in cues.iter_mut().zip(lines.into_iter()) {
-                    cue.text = line;
-                }
-            }
-            None => {
-                for cue in cues.iter_mut() {
-                    let src = cue.text.clone();
-                    cue.text = fallback_translate_line(&src, code);
-                }
+        } else if !online {
+            // Explicit offline (or empty cues): deterministic placeholders.
+            for cue in cues.iter_mut() {
+                let src = cue.text.clone();
+                cue.text = fallback_translate_line(&src, code);
             }
         }
         write_srt(&cache_path, &cues)?;
@@ -383,5 +599,56 @@ mod tests {
             "이쪽으로 와."
         );
         assert_eq!(strip_existing_speaker_tag("Hello"), "Hello");
+    }
+
+    #[test]
+    fn test_cache_is_fallback_detects_placeholders() {
+        let src = vec![cue(0.0, 1.0, "Hello world"), cue(1.0, 2.0, "How are you?")];
+        // Offline placeholder cache for ja.
+        let cached = vec![
+            cue(0.0, 1.0, "[JA] Hello world"),
+            cue(1.0, 2.0, "[JA] How are you?"),
+        ];
+        assert!(cache_is_fallback(&cached, &src, "ja"));
+        // Real Japanese translation is not a fallback.
+        let real = vec![
+            cue(0.0, 1.0, "こんにちは、世界"),
+            cue(1.0, 2.0, "お元気ですか？"),
+        ];
+        assert!(!cache_is_fallback(&real, &src, "ja"));
+        // ko verbatim of Korean source is legitimate.
+        let ko_src = vec![cue(0.0, 1.0, "안녕하세요")];
+        let ko_cache = vec![cue(0.0, 1.0, "안녕하세요")];
+        assert!(!cache_is_fallback(&ko_cache, &ko_src, "ko"));
+        // ko cache holding English for an English source is a placeholder.
+        assert!(
+            cache_is_fallback(&cached, &src, "ko")
+                || is_fallback_line("[JA] Hello world", "Hello world", "ja")
+        );
+    }
+
+    #[test]
+    fn test_validate_translation_rejects_english_in_ja() {
+        let src = vec![cue(0.0, 1.0, "Hello world"), cue(1.0, 2.0, "How are you?")];
+        // English echoed into a .ja file must fail.
+        let bad = vec!["Hello world".to_string(), "How are you?".to_string()];
+        assert!(validate_translation(&bad, "ja", &src).is_err());
+        let tagged = vec![
+            "[JA] Hello world".to_string(),
+            "[JA] How are you?".to_string(),
+        ];
+        assert!(validate_translation(&tagged, "ja", &src).is_err());
+        // Real Japanese passes.
+        let good = vec!["こんにちは、世界".to_string(), "お元気ですか？".to_string()];
+        assert!(validate_translation(&good, "ja", &src).is_ok());
+    }
+
+    #[test]
+    fn test_source_already_in_target_skips_m3() {
+        let ja = vec![cue(0.0, 1.0, "こんにちは"), cue(1.0, 2.0, "お元気ですか")];
+        assert!(source_already_in_target(&ja, "ja"));
+        let en = vec![cue(0.0, 1.0, "Hello"), cue(1.0, 2.0, "How are you?")];
+        assert!(!source_already_in_target(&en, "ja"));
+        assert!(source_already_in_target(&en, "en"));
     }
 }

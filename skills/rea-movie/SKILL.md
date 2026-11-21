@@ -127,11 +127,16 @@ rea-movie assemble --smoke
 
 # 증명용 비디오도 함께 생성 (화자 태그 자막 번인: [화자] 대사 1줄 통합)
 rea-movie assemble --smoke --proof
-# 오프라인 조립 (M3 자막 번역 없이 결정적 폴백만 사용)
+# 오프라인 조립 (M3 자막 번역 없이 결정적 폴백만 사용 — [JA] 영어 플레이스홀더 주의)
 rea-movie assemble --smoke --offline --proof
+# 온라인(기본)은 MiniMax-M3로 6개국어 실번역. MINIMAX_API_KEY 필수, 실패 시 크게 에러
+# (가짜 영어 .ja.srt를 캐시하지 않음). 과거 플레이스홀더 캐시는 온라인 실행 시 자동 재번역됨.
+# 이미 오염된 자막을 강제 재생성: rea-movie assemble --smoke --force (API 키 필요)
 ```
 - 조립 시 6개국어 외부 자막 자동 생성: `<movie>_<profile>.{ko,zh,ja,en,fr,de}.srt` + 항상 `.proof.srt`
   (원본: `<proj>/story/transcript.srt`, 번역 캐시: `<proj>/story/subtitles_cache/<lang>.srt`).
+  온라인은 M3 실번역 + 목표문자 검증(ja=가나/한자, ko=한글, zh=한자) 후 캐시. 검증 실패·API 실패 시
+  플레이스홀더를 쓰지 않고 에러 종료. `--offline`일 때만 `[XX] 원문` 플레이스홀더 생성.
 - 원본 비디오는 건드리지 않고, 4.0초 미만 샷의 H3 렌더 클립은 끝 프레임까지 살려
   `target_dur`에 리타이밍 (`setpts` 비디오 + `atempo` 오디오) — 단순 절단 금지 (끝 앵커 소실 버그 방지).
 - 최종 본편 듀얼 오디오: Track 1(H3) + Track 2(원본). **기본(default) 트랙은 원본 오디오.**
